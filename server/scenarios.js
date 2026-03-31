@@ -41,7 +41,7 @@ const sharedLimits = {
   getRatio: { min: 0, max: 20, step: 1, label: 'Get ratio' },
   dataSize: { min: 8, max: 4096, step: 8, label: 'Value bytes' },
   rateLimit: { min: 1000, max: 100000, step: 1000, label: 'Rate limit / sec' },
-  pipeline: { min: 1, max: 100, step: 1, label: 'Pipeline' },
+  pipeline: { min: 1, max: 500, step: 1, label: 'Pipeline' },
 };
 
 function createScenario(id, name, defaults) {
@@ -106,6 +106,19 @@ export const scenarios = [
     rateLimitEnabled: false,
     rateLimit: 20000,
     pipeline: 1,
+  }),
+  createScenario('high-pipeline-batch-blast', 'High Pipeline Batch Blast', {
+    clients: 24,
+    threads: 4,
+    testTime: 15,
+    limitMode: 'time',
+    requestCount: 150000,
+    setRatio: 1,
+    getRatio: 10,
+    dataSize: 32,
+    rateLimitEnabled: false,
+    rateLimit: 20000,
+    pipeline: 150,
   }),
 ];
 

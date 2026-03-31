@@ -1,8 +1,9 @@
-import { serializeConnectionTarget } from './redis-target.js';
+import { buildRedisInsightUrl, serializeConnectionTarget } from './redis-target.js';
 import { applySummaryLine, createEmptySummary } from './memtier-summary.js';
 
 const MAX_SERIES_POINTS = 240;
 const MAX_LOG_LINES = 600;
+const MAX_SNAPSHOT_RUNS = 60;
 
 function createEmptyMetrics() {
   return {
@@ -23,37 +24,155 @@ function createEmptyMetrics() {
 }
 
 const state = {
-  connection: null,
-  activeRunId: null,
+  connections: new Map(),
+  connectionOrder: [],
+  selectedConnectionId: null,
   runs: new Map(),
 };
 
-export function setConnectionTarget(target) {
-  state.connection = target;
+function sanitizeName(name, fallback) {
+  const trimmed = String(name ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return trimmed || fallback;
 }
 
-export function clearConnectionTarget() {
-  state.connection = null;
+function serializeConnection(connection) {
+  if (!connection) {
+    return null;
+  }
+
+  return {
+    id: connection.id,
+    name: connection.name,
+    createdAt: connection.createdAt,
+    rttMs: connection.rttMs ?? null,
+    rttWarning: Boolean(connection.rttWarning),
+    redisInsightUrl: buildRedisInsightUrl(connection.target, {
+      databaseAlias: connection.name,
+    }),
+    ...serializeConnectionTarget(connection.target),
+  };
+}
+
+function getOrderedConnections() {
+  return state.connectionOrder
+    .map((connectionId) => state.connections.get(connectionId))
+    .filter(Boolean);
+}
+
+function recordSeriesPoint(series, point) {
+  series.push(point);
+  if (series.length > MAX_SERIES_POINTS) {
+    series.splice(0, series.length - MAX_SERIES_POINTS);
+  }
+}
+
+export function createConnection({ id, name, target }) {
+  const connection = {
+    id,
+    name: sanitizeName(name, target.summary),
+    target,
+    createdAt: new Date().toISOString(),
+    rttMs: null,
+    rttWarning: false,
+  };
+
+  state.connections.set(id, connection);
+  state.connectionOrder.push(id);
+  state.selectedConnectionId = id;
+  return serializeConnection(connection);
+}
+
+export function updateConnectionRtt(connectionId, rttMs) {
+  const connection = state.connections.get(connectionId);
+  if (!connection) {
+    return null;
+  }
+
+  connection.rttMs = Number.isFinite(rttMs) ? rttMs : null;
+  connection.rttWarning = Number.isFinite(rttMs) ? rttMs > 10 : false;
+  return serializeConnection(connection);
+}
+
+export function renameConnection(connectionId, name) {
+  const connection = state.connections.get(connectionId);
+  if (!connection) {
+    return null;
+  }
+
+  connection.name = sanitizeName(name, connection.target.summary);
+  return serializeConnection(connection);
+}
+
+export function removeConnection(connectionId) {
+  const connection = state.connections.get(connectionId);
+  if (!connection) {
+    return null;
+  }
+
+  state.connections.delete(connectionId);
+  state.connectionOrder = state.connectionOrder.filter((id) => id !== connectionId);
+
+  if (state.selectedConnectionId === connectionId) {
+    state.selectedConnectionId = state.connectionOrder[0] ?? null;
+  }
+
+  return serializeConnection(connection);
+}
+
+export function selectConnection(connectionId) {
+  if (!state.connections.has(connectionId)) {
+    return null;
+  }
+
+  state.selectedConnectionId = connectionId;
+  return serializeConnection(state.connections.get(connectionId));
+}
+
+export function clearConnections() {
+  state.connections.clear();
+  state.connectionOrder = [];
+  state.selectedConnectionId = null;
+}
+
+export function getConnections() {
+  return getOrderedConnections();
+}
+
+export function getConnection(connectionId) {
+  return state.connections.get(connectionId) ?? null;
+}
+
+export function getSelectedConnection() {
+  if (!state.selectedConnectionId) {
+    return null;
+  }
+
+  return state.connections.get(state.selectedConnectionId) ?? null;
 }
 
 export function clearRuns() {
-  state.activeRunId = null;
   state.runs.clear();
-}
-
-export function getConnectionTarget() {
-  return state.connection;
-}
-
-export function getActiveRunId() {
-  return state.activeRunId;
 }
 
 export function getRun(id) {
   return state.runs.get(id) ?? null;
 }
 
-export function createRun({ command, displayName = null, id, label, scenario, target }) {
+export function getRunningRuns() {
+  return Array.from(state.runs.values()).filter((run) => run.status === 'running');
+}
+
+export function hasRunningRuns() {
+  return getRunningRuns().length > 0;
+}
+
+export function getActiveRunIds() {
+  return getRunningRuns().map((run) => run.id);
+}
+
+export function createRun({ command, connection, displayName = null, id, label, scenario }) {
   const timestamp = new Date().toISOString();
   const run = {
     id,
@@ -63,7 +182,9 @@ export function createRun({ command, displayName = null, id, label, scenario, ta
     scenarioName: scenario.name,
     scenarioDescription: scenario.description,
     scenarioConfig: { ...scenario.config },
-    target: serializeConnectionTarget(target),
+    connectionId: connection.id,
+    connectionName: connection.name,
+    target: serializeConnectionTarget(connection.target),
     status: 'running',
     createdAt: timestamp,
     startedAt: timestamp,
@@ -75,6 +196,7 @@ export function createRun({ command, displayName = null, id, label, scenario, ta
     series: {
       ops_sec: [],
       latency_ms: [],
+      latency_p99: [],
       bytes_sec: [],
       connections: [],
       connection_errors: [],
@@ -84,7 +206,6 @@ export function createRun({ command, displayName = null, id, label, scenario, ta
   };
 
   state.runs.set(id, run);
-  state.activeRunId = id;
   return run;
 }
 
@@ -106,13 +227,6 @@ export function appendLog(runId, { stream, text }) {
   }
 
   return entry;
-}
-
-function recordSeriesPoint(series, point) {
-  series.push(point);
-  if (series.length > MAX_SERIES_POINTS) {
-    series.splice(0, series.length - MAX_SERIES_POINTS);
-  }
 }
 
 export function recordMetric(runId, { metric, value, timestamp }) {
@@ -141,6 +255,7 @@ export function recordMetric(runId, { metric, value, timestamp }) {
   if (
     metric === 'ops_sec' ||
     metric === 'latency_ms' ||
+    metric === 'latency_p99' ||
     metric === 'bytes_sec' ||
     metric === 'connections' ||
     metric === 'connection_errors'
@@ -172,10 +287,6 @@ export function finishRun(runId, { status, exitCode = null, error = null }) {
   run.error = error;
   run.endedAt = new Date().toISOString();
 
-  if (state.activeRunId === runId) {
-    state.activeRunId = null;
-  }
-
   return run;
 }
 
@@ -188,6 +299,8 @@ export function serializeRun(run, { includeLogs = true } = {}) {
     scenarioName: run.scenarioName,
     scenarioDescription: run.scenarioDescription,
     scenarioConfig: { ...run.scenarioConfig },
+    connectionId: run.connectionId,
+    connectionName: run.connectionName,
     target: run.target,
     status: run.status,
     createdAt: run.createdAt,
@@ -200,6 +313,7 @@ export function serializeRun(run, { includeLogs = true } = {}) {
     series: {
       ops_sec: [...run.series.ops_sec],
       latency_ms: [...run.series.latency_ms],
+      latency_p99: [...run.series.latency_p99],
       bytes_sec: [...run.series.bytes_sec],
       connections: [...run.series.connections],
       connection_errors: [...run.series.connection_errors],
@@ -217,12 +331,13 @@ export function serializeRun(run, { includeLogs = true } = {}) {
 export function getStateSnapshot() {
   const runs = Array.from(state.runs.values())
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-    .slice(-5)
+    .slice(-MAX_SNAPSHOT_RUNS)
     .map((run) => serializeRun(run));
 
   return {
-    connection: serializeConnectionTarget(state.connection),
-    activeRunId: state.activeRunId,
+    connections: getOrderedConnections().map(serializeConnection),
+    selectedConnectionId: state.selectedConnectionId,
+    activeRunIds: getActiveRunIds(),
     runs,
   };
 }

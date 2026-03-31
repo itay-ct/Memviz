@@ -1,4 +1,5 @@
 import {
+  Fragment,
   startTransition,
   useEffect,
   useEffectEvent,
@@ -24,6 +25,7 @@ import integratedModulesIconMidnight from './assets/icons/redis/integrated-modul
 import latencyIconWhite from './assets/icons/redis/latency-white.svg';
 import meteringIconMidnight from './assets/icons/redis/metering-midnight.svg';
 import pipelineIconWhite from './assets/icons/redis/pipeline-white.svg';
+import redisInsightIconDuotone from './assets/icons/redis/redis-insight-duotone.svg';
 import settingsIconMidnight from './assets/icons/redis/settings-midnight.svg';
 import settingsIconWhite from './assets/icons/redis/settings-white.svg';
 
@@ -42,6 +44,28 @@ function CheckIcon() {
   );
 }
 
+function WarningIcon() {
+  return (
+    <svg aria-hidden="true" className="warning-icon" viewBox="0 0 16 16">
+      <path
+        d="M8 2.1 14 13.2H2L8 2.1Z"
+        fill="none"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.3"
+      />
+      <path
+        d="M8 5.7v3.8"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.4"
+      />
+      <circle cx="8" cy="11.7" r="0.8" fill="currentColor" />
+    </svg>
+  );
+}
+
 const DEFAULT_FORM = {
   hostOrUrl: '127.0.0.1',
   port: '6379',
@@ -49,9 +73,17 @@ const DEFAULT_FORM = {
   password: '',
 };
 
+const BLANK_CONNECTION_FORM = {
+  hostOrUrl: '',
+  port: '',
+  username: '',
+  password: '',
+};
+
 const EMPTY_APP_STATE = {
-  connection: null,
-  activeRunId: null,
+  connections: [],
+  selectedConnectionId: null,
+  activeRunIds: [],
   runs: [],
   scenarios: [],
 };
@@ -93,36 +125,27 @@ function upsertRun(runs, nextRun) {
   return updatedRuns;
 }
 
+function getActiveRunIdsFromRuns(runs) {
+  return runs.filter((run) => run.status === 'running').map((run) => run.id);
+}
+
 function reduceSocketMessage(state, message) {
   if (message.type === 'snapshot') {
     return {
-      connection: message.state.connection,
-      activeRunId: message.state.activeRunId,
+      connections: message.state.connections ?? [],
+      selectedConnectionId: message.state.selectedConnectionId ?? null,
+      activeRunIds: message.state.activeRunIds ?? getActiveRunIdsFromRuns(message.state.runs ?? []),
       runs: message.state.runs,
       scenarios: message.scenarios,
     };
   }
 
-  if (message.type === 'connection') {
-    return {
-      ...state,
-      connection: message.connection,
-    };
-  }
-
-  if (message.type === 'disconnected') {
-    return {
-      ...state,
-      connection: null,
-      activeRunId: null,
-    };
-  }
-
   if (message.type === 'run_started') {
+    const runs = upsertRun(state.runs, message.run);
     return {
       ...state,
-      activeRunId: message.run.id,
-      runs: upsertRun(state.runs, message.run),
+      activeRunIds: getActiveRunIdsFromRuns(runs),
+      runs,
     };
   }
 
@@ -163,11 +186,11 @@ function reduceSocketMessage(state, message) {
   }
 
   if (message.type === 'run_finished') {
+    const runs = upsertRun(state.runs, message.run);
     return {
       ...state,
-      activeRunId:
-        state.activeRunId === message.run.id ? null : state.activeRunId,
-      runs: upsertRun(state.runs, message.run),
+      activeRunIds: getActiveRunIdsFromRuns(runs),
+      runs,
     };
   }
 
@@ -279,6 +302,36 @@ function formatConnections(value) {
   return `${Math.round(value)}`;
 }
 
+function formatRtt(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ms`;
+}
+
+function getConnectionStatusTooltip(connection) {
+  if (connection.rttMs === null || connection.rttMs === undefined) {
+    return 'Round trip time: measuring...';
+  }
+
+  const rtt = formatRtt(connection.rttMs);
+
+  if (connection.rttWarning) {
+    return `Round trip time: ${rtt}\nHigher RTT can distort latency and throughput measurements, so for cleaner benchmark results it is recommended to run memtier closer to the Redis database.`;
+  }
+
+  return `Round trip time: ${rtt}`;
+}
+
+function formatRunWarningTooltip(error) {
+  if (!error) {
+    return '';
+  }
+
+  return `Run failed\n${error}`;
+}
+
 function formatProgress(value) {
   return `${Math.max(0, Math.min(100, value)).toFixed(0)}%`;
 }
@@ -377,8 +430,24 @@ function describeDraftConfig(config) {
     .join(' • ');
 }
 
+function describeDraftSummary(config, run) {
+  return [run?.connectionName ?? null, describeDraftConfig(config)].filter(Boolean).join(' • ');
+}
+
 function buildDefaultDraftName(scenarioName, number) {
   return `${scenarioName} #${number}`;
+}
+
+function getBaseRunLabel(run, draft) {
+  return draft?.name ?? run.displayName ?? run.scenarioName;
+}
+
+function appendConnectionName(label, connectionName) {
+  if (!connectionName || label.includes(connectionName)) {
+    return label;
+  }
+
+  return `${label} · ${connectionName}`;
 }
 
 function getDraftName(draft, scenario) {
@@ -386,11 +455,7 @@ function getDraftName(draft, scenario) {
 }
 
 function getRunTitle(run, draft) {
-  if (draft?.name) {
-    return draft.name;
-  }
-
-  return run.displayName ?? run.scenarioName;
+  return appendConnectionName(getBaseRunLabel(run, draft), run.connectionName);
 }
 
 function sanitizeDraftName(name, fallback) {
@@ -476,13 +541,25 @@ function getSeriesPercentile(points, percentile) {
   return values[index];
 }
 
+function getSeriesAverage(points) {
+  const values = (points ?? [])
+    .map((point) => point?.value)
+    .filter((value) => value !== null && value !== undefined && !Number.isNaN(value));
+
+  if (!values.length) {
+    return null;
+  }
+
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
 function getDisplaySeries(run, key) {
   const points = run?.series?.[key] ?? [];
   if (!run || run.status === 'running') {
     return points;
   }
 
-  if (['ops_sec', 'bytes_sec', 'connections'].includes(key)) {
+  if (['ops_sec', 'bytes_sec', 'connections', 'latency_p99'].includes(key)) {
     return trimTerminalResetPoints(points);
   }
 
@@ -497,16 +574,34 @@ function getFinalMetricValue(preferred, fallback = null) {
   return fallback;
 }
 
-function buildPrimaryMetricItems(run) {
-  const metrics = run.metrics;
+function getAverageThroughputValue(run) {
   const summaryTotals = run.summary?.results?.totals;
   const throughputSeries = getDisplaySeries(run, 'ops_sec');
 
-  const finalThroughput = getFinalMetricValue(
+  return getFinalMetricValue(
     summaryTotals?.opsSec,
-    getFinalMetricValue(metrics.ops_sec_avg, getSeriesValueAtEnd(throughputSeries)),
+    getFinalMetricValue(run.metrics.ops_sec_avg, getSeriesAverage(throughputSeries)),
   );
-  const finalP99 = getFinalMetricValue(summaryTotals?.p99Latency, metrics.latency_p99);
+}
+
+function getP99LatencyValue(run) {
+  const summaryTotals = run.summary?.results?.totals;
+  const latencyP99Series = getDisplaySeries(run, 'latency_p99');
+  const rollingP99 = getSeriesAverage(latencyP99Series);
+
+  if (run.status === 'running') {
+    return getFinalMetricValue(rollingP99, run.metrics.latency_p99);
+  }
+
+  return getFinalMetricValue(
+    summaryTotals?.p99Latency,
+    getFinalMetricValue(rollingP99, run.metrics.latency_p99),
+  );
+}
+
+function buildPrimaryMetricItems(run) {
+  const finalThroughput = getAverageThroughputValue(run);
+  const finalP99 = getP99LatencyValue(run);
 
   return [
     {
@@ -531,10 +626,7 @@ function buildAdvancedMetricItems(run) {
   const bytesSeries = getDisplaySeries(run, 'bytes_sec');
   const connectionsSeries = getDisplaySeries(run, 'connections');
   const latencySeries = getDisplaySeries(run, 'latency_ms');
-  const averageThroughput = getFinalMetricValue(
-    summaryTotals?.opsSec,
-    getFinalMetricValue(metrics.ops_sec_avg, getSeriesValueAtEnd(throughputSeries)),
-  );
+  const averageThroughput = getAverageThroughputValue(run);
   const p90Latency = getFinalMetricValue(
     summaryTotals?.p90Latency,
     getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
@@ -584,10 +676,7 @@ function buildAdvancedMetricItems(run) {
     },
     {
       label: 'p99 latency',
-      value: formatMetric(
-        getFinalMetricValue(summaryTotals?.p99Latency, metrics.latency_p99),
-        formatLatency,
-      ),
+      value: formatMetric(getP99LatencyValue(run), formatLatency),
     },
     {
       label: 'Average bandwidth',
@@ -620,13 +709,8 @@ function buildSetupItems(config) {
 }
 
 function buildThroughputSummaryOptions(run) {
-  const metrics = run.metrics;
-  const summaryTotals = run.summary?.results?.totals;
   const throughputSeries = getDisplaySeries(run, 'ops_sec');
-  const averageThroughput = getFinalMetricValue(
-    summaryTotals?.opsSec,
-    getFinalMetricValue(metrics.ops_sec_avg, getSeriesValueAtEnd(throughputSeries)),
-  );
+  const averageThroughput = getAverageThroughputValue(run);
 
   return [
     {
@@ -680,7 +764,7 @@ function buildLatencySummaryOptions(run) {
     {
       key: 'p99',
       label: 'p99',
-      value: getFinalMetricValue(summaryTotals?.p99Latency, metrics.latency_p99),
+      value: getP99LatencyValue(run),
       formatter: formatLatency,
     },
   ];
@@ -691,9 +775,8 @@ function getScenarioOutcomeStats(run) {
     return [];
   }
 
-  const summaryTotals = run.summary?.results?.totals;
-  const averageThroughput = getFinalMetricValue(summaryTotals?.opsSec, run.metrics.ops_sec_avg);
-  const p99Latency = getFinalMetricValue(summaryTotals?.p99Latency, run.metrics.latency_p99);
+  const averageThroughput = getAverageThroughputValue(run);
+  const p99Latency = getP99LatencyValue(run);
 
   return [
     {
@@ -708,11 +791,7 @@ function getScenarioOutcomeStats(run) {
 }
 
 function getRunLabel(run, draft) {
-  if (draft?.name) {
-    return draft.name;
-  }
-
-  return run.displayName ?? run.scenarioName;
+  return appendConnectionName(getBaseRunLabel(run, draft), run.connectionName);
 }
 
 function getComparisonSnapshot(run, draft) {
@@ -723,6 +802,7 @@ function getComparisonSnapshot(run, draft) {
 
   return {
     label: getRunLabel(run, draft),
+    connection: run.connectionName ?? run.target?.summary ?? null,
     clients: config.clients ?? run.summary?.config.connectionsPerThread ?? null,
     threads: config.threads ?? run.summary?.config.threads ?? null,
     runLimit: config.limitMode ? formatRunLimit(config) : null,
@@ -733,7 +813,7 @@ function getComparisonSnapshot(run, draft) {
     dataSize: config.dataSize ?? null,
     pipeline: config.pipeline ?? null,
     rateLimit: config.limitMode ? formatRateLimitSummary(config) : null,
-    averageThroughput: getFinalMetricValue(summaryTotals?.opsSec, run.metrics.ops_sec_avg),
+    averageThroughput: getAverageThroughputValue(run),
     peakThroughput: getSeriesPeak(throughputSeries),
     minimumThroughput: getSeriesMinimum(throughputSeries),
     averageBandwidthDisplay:
@@ -746,7 +826,7 @@ function getComparisonSnapshot(run, draft) {
     averageLatency: getFinalMetricValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
     p50Latency: getFinalMetricValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
     p90Latency: getFinalMetricValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
-    p99Latency: getFinalMetricValue(summaryTotals?.p99Latency, run.metrics.latency_p99),
+    p99Latency: getP99LatencyValue(run),
     hitsSec: summaryTotals?.hitsSec ?? null,
     missesSec: summaryTotals?.missesSec ?? null,
     connectionErrors: run.metrics.connection_errors,
@@ -760,6 +840,10 @@ function buildComparisonRows(runsWithDrafts) {
     {
       type: 'section',
       label: 'Test setup',
+    },
+    {
+      label: 'Connection',
+      values: snapshots.map((snapshot) => snapshot.connection ?? '—'),
     },
     {
       label: 'Clients / thread',
@@ -840,6 +924,34 @@ function buildComparisonRows(runsWithDrafts) {
       values: snapshots.map((snapshot) => formatMetric(snapshot.connectionErrors, formatConnections)),
     },
   ];
+}
+
+function groupComparisonRows(rows) {
+  const groups = [];
+  let currentGroup = null;
+
+  for (const row of rows) {
+    if (row.type === 'section') {
+      currentGroup = {
+        label: row.label,
+        rows: [],
+      };
+      groups.push(currentGroup);
+      continue;
+    }
+
+    if (!currentGroup) {
+      currentGroup = {
+        label: 'Details',
+        rows: [],
+      };
+      groups.push(currentGroup);
+    }
+
+    currentGroup.rows.push(row);
+  }
+
+  return groups;
 }
 
 function downloadComparisonCsv(runsWithDrafts) {
@@ -1023,92 +1135,224 @@ function ConnectionScreen({
   );
 }
 
-function TopBar({
+function ConnectionFormPanel({
   connectDisabled,
   connectPending,
-  connection,
   formState,
   onConnect,
-  onDisconnect,
   onFormChange,
-  runningRun,
-  setup,
 }) {
-  if (!connection) {
-    const setupReady = setup.status === 'ready';
-    const setupNote =
-      setup.status === 'ready'
-        ? `Ready on port ${setup.appPort}`
-        : setup.status === 'error'
-          ? 'Setup needs attention'
-          : 'Preparing memtier';
-    const connectLabel = connectPending
-      ? 'Connecting…'
-      : !setupReady
-        ? setup.status === 'error'
-          ? 'Setup needed'
-          : 'Preparing…'
-        : 'Connect';
+  return (
+    <form className="topbar-connect-form" onSubmit={onConnect}>
+      <input
+        autoComplete="off"
+        name="hostOrUrl"
+        onChange={onFormChange}
+        placeholder="Host or URL"
+        value={formState.hostOrUrl}
+      />
+      <input
+        inputMode="numeric"
+        name="port"
+        onChange={onFormChange}
+        placeholder="Port"
+        value={formState.port}
+      />
+      <input
+        autoComplete="username"
+        name="username"
+        onChange={onFormChange}
+        placeholder="Username"
+        value={formState.username}
+      />
+      <input
+        autoComplete="current-password"
+        name="password"
+        onChange={onFormChange}
+        placeholder="Password"
+        type="password"
+        value={formState.password}
+      />
+      <button className="primary-button" disabled={connectDisabled} type="submit">
+        {connectPending ? 'Connecting…' : 'Connect'}
+      </button>
+    </form>
+  );
+}
 
-    return (
-      <header className="topbar topbar-disconnected">
-        <div className="topbar-brand">
-          <div className="topbar-brand-mark">
-            <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
-          </div>
-          <div className="topbar-brand-copy">
-            <p className="eyebrow">memviz</p>
-            <strong>Redis benchmark workspace</strong>
-            <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
-          </div>
-        </div>
+function ConnectionCard({
+  connection,
+  disabled,
+  isSelected,
+  onDisconnect,
+  onOpenRedisInsight,
+  onRename,
+  onSelect,
+}) {
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(connection.name);
+  const titleEditorRef = useRef(null);
 
-        <form className="topbar-connect-form" onSubmit={onConnect}>
-          <div className="topbar-connect-mark">
-            <IconAsset
-              className="topbar-connect-icon"
-              src={integratedModulesIconMidnight}
-            />
-          </div>
-          <input
-            autoComplete="off"
-            name="hostOrUrl"
-            onChange={onFormChange}
-            placeholder="Host or URL"
-            value={formState.hostOrUrl}
-          />
-          <input
-            inputMode="numeric"
-            name="port"
-            onChange={onFormChange}
-            placeholder="Port"
-            value={formState.port}
-          />
-          <input
-            autoComplete="username"
-            name="username"
-            onChange={onFormChange}
-            placeholder="Username"
-            value={formState.username}
-          />
-          <input
-            autoComplete="current-password"
-            name="password"
-            onChange={onFormChange}
-            placeholder="Password"
-            type="password"
-            value={formState.password}
-          />
-          <button className="primary-button" disabled={connectDisabled} type="submit">
-            {connectLabel}
-          </button>
-        </form>
-      </header>
-    );
+  useEffect(() => {
+    if (!isRenaming) {
+      setRenameValue(connection.name);
+    }
+  }, [connection.name, isRenaming]);
+
+  useEffect(() => {
+    if (!isRenaming) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (titleEditorRef.current?.contains(event.target)) {
+        return;
+      }
+
+      setIsRenaming(false);
+      setRenameValue(connection.name);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [connection.name, isRenaming]);
+
+  function commitRename() {
+    setIsRenaming(false);
+    onRename(connection.id, sanitizeDraftName(renameValue, connection.name));
   }
 
   return (
-    <header className="topbar">
+    <article
+      className={`connection-card ${isSelected ? 'is-selected' : ''}`}
+      onClick={() => onSelect(connection.id)}
+    >
+      <div className="connection-card-header">
+        <div className="scenario-title-row connection-title-row">
+          {isRenaming ? (
+            <div
+              className="title-editor"
+              onClick={(event) => event.stopPropagation()}
+              ref={titleEditorRef}
+            >
+              <input
+                className="title-editor-input"
+                onChange={(event) => setRenameValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    commitRename();
+                  }
+
+                  if (event.key === 'Escape') {
+                    setIsRenaming(false);
+                    setRenameValue(connection.name);
+                  }
+                }}
+                value={renameValue}
+              />
+              <button className="rename-confirm" onClick={commitRename} type="button">
+                <CheckIcon />
+              </button>
+            </div>
+          ) : (
+            <>
+              <strong>{connection.name}</strong>
+              <button
+                className="rename-toggle"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsRenaming(true);
+                }}
+                type="button"
+              >
+                <IconAsset className="button-icon button-icon-sm" src={editIconMidnight} />
+              </button>
+            </>
+          )}
+        </div>
+
+        <button
+          className="connection-disconnect-icon"
+          disabled={disabled}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDisconnect(connection.id);
+          }}
+          title="Disconnect"
+          type="button"
+        >
+          <IconAsset className="button-icon" src={integratedModulesIconMidnight} />
+        </button>
+      </div>
+
+      <div className="connection-card-meta">
+        <div className="status-mark">
+          <span
+            className="connection-status-anchor"
+            onClick={(event) => event.stopPropagation()}
+            tabIndex={0}
+          >
+            <span className={`status-dot ${connection.rttWarning ? 'is-warning' : ''}`} />
+            <span className="connection-status-tooltip">{getConnectionStatusTooltip(connection)}</span>
+          </span>
+          <span>Connected</span>
+        </div>
+        <span>{connection.summary}</span>
+      </div>
+
+      <button
+        className="connection-insight-icon"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenRedisInsight(connection.redisInsightUrl);
+        }}
+        title="Open in RedisInsight"
+        type="button"
+      >
+        <IconAsset className="button-icon redis-insight-icon-art" src={redisInsightIconDuotone} />
+      </button>
+    </article>
+  );
+}
+
+function TopBar({
+  connectDisabled,
+  connectPending,
+  connections,
+  formState,
+  hasRunningRuns,
+  onConnect,
+  onDisconnect,
+  onFormChange,
+  onPrepareAddConnection,
+  onOpenRedisInsight,
+  onRenameConnection,
+  onSelectConnection,
+  selectedConnectionId,
+  setup,
+}) {
+  const [showAddConnectionForm, setShowAddConnectionForm] = useState(false);
+  const setupReady = setup.status === 'ready';
+  const setupNote =
+    setup.status === 'error' ? 'Setup needs attention' : !setupReady ? 'Preparing memtier' : null;
+  const canAddConnection =
+    setupReady && connections.length < 3 && !hasRunningRuns;
+  const showForm = !connections.length || showAddConnectionForm;
+
+  useEffect(() => {
+    if (!connections.length) {
+      setShowAddConnectionForm(true);
+      return;
+    }
+
+    setShowAddConnectionForm(false);
+  }, [connections.length]);
+
+  return (
+    <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
       <div className="topbar-brand">
         <div className="topbar-brand-mark">
           <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
@@ -1116,31 +1360,57 @@ function TopBar({
         <div className="topbar-brand-copy">
           <p className="eyebrow">memviz</p>
           <strong>Redis benchmark workspace</strong>
+          {setupNote ? (
+            <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
+          ) : null}
         </div>
       </div>
 
-      <div className="topbar-target">
-        <span className="topbar-label">Redis target</span>
-        <div className="topbar-target-main">
-          <div className="status-mark">
-            <span className="status-dot" />
-            <span>Connected</span>
-          </div>
-          <strong>{connection.summary}</strong>
-        </div>
+      <div className="topbar-connections">
+        {connections.map((connection) => (
+          <ConnectionCard
+            connection={connection}
+            disabled={hasRunningRuns}
+            isSelected={connection.id === selectedConnectionId}
+            key={connection.id}
+            onDisconnect={onDisconnect}
+            onOpenRedisInsight={onOpenRedisInsight}
+            onRename={onRenameConnection}
+            onSelect={onSelectConnection}
+          />
+        ))}
+
+        {showForm ? (
+          <ConnectionFormPanel
+            connectDisabled={connectDisabled}
+            connectPending={connectPending}
+            formState={formState}
+            onConnect={onConnect}
+            onFormChange={onFormChange}
+          />
+        ) : null}
       </div>
 
-      <div className="topbar-trailing">
-        {runningRun ? <span className="run-pill">Run active</span> : null}
-        <button
-          className="ghost-button"
-          disabled={Boolean(runningRun)}
-          onClick={onDisconnect}
-          type="button"
-        >
-          Disconnect
-        </button>
-      </div>
+      {connections.length ? (
+        <div className="topbar-trailing">
+          <button
+            className="ghost-button"
+            disabled={!canAddConnection}
+            onClick={() =>
+              setShowAddConnectionForm((current) => {
+                const next = !current;
+                if (next) {
+                  onPrepareAddConnection();
+                }
+                return next;
+              })
+            }
+            type="button"
+          >
+            {showForm ? 'Close' : 'Add connection'}
+          </button>
+        </div>
+      ) : null}
     </header>
   );
 }
@@ -1335,7 +1605,7 @@ function ConfigTable({
       <table className="config-table-ui">
         <tbody>
           <ConfigRow label="Run limit">
-            <div className="config-composite-control">
+            <div className="config-composite-control config-composite-control-paired">
               <ComboButton
                 className="combo-button-cell"
                 disabled={disabled}
@@ -1356,7 +1626,7 @@ function ConfigTable({
           </ConfigRow>
 
           <ConfigRow label="Rate limiting">
-            <div className="config-composite-control">
+            <div className="config-composite-control config-composite-control-paired">
               <label className="config-checkbox">
                 <input
                   checked={config.rateLimitEnabled}
@@ -1364,7 +1634,7 @@ function ConfigTable({
                   onChange={(event) => onConfigChange('rateLimitEnabled', event.target.checked)}
                   type="checkbox"
                 />
-                <span>Enabled</span>
+                <span>On</span>
               </label>
               {config.rateLimitEnabled ? (
                 <NumericCellControl
@@ -1542,6 +1812,7 @@ function ScenarioCard({
   compareSelected,
   compareSelectionDisabled,
   config,
+  connectionCount,
   disabled,
   draft,
   isLaunching,
@@ -1550,6 +1821,7 @@ function ScenarioCard({
   isSelected,
   isCustomizing,
   onRename,
+  selectedConnectionName,
   onSelect,
   onToggleCompareSelection,
   run,
@@ -1568,7 +1840,9 @@ function ScenarioCard({
         : run?.status ?? 'Queued';
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(getDraftName(draft, scenario));
+  const [showRunMenu, setShowRunMenu] = useState(false);
   const title = getDraftName(draft, scenario);
+  const titleEditorRef = useRef(null);
 
   useEffect(() => {
     if (!isRenaming) {
@@ -1581,6 +1855,32 @@ function ScenarioCard({
       setIsRenaming(false);
     }
   }, [compareMode]);
+
+  useEffect(() => {
+    if (!isRenaming) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (titleEditorRef.current?.contains(event.target)) {
+        return;
+      }
+
+      setIsRenaming(false);
+      setRenameValue(title);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isRenaming, title]);
+
+  useEffect(() => {
+    if (disabled || compareMode || isLocked) {
+      setShowRunMenu(false);
+    }
+  }, [compareMode, disabled, isLocked]);
 
   function commitRename() {
     setIsRenaming(false);
@@ -1599,6 +1899,7 @@ function ScenarioCard({
               <div
                 className="title-editor"
                 onClick={(event) => event.stopPropagation()}
+                ref={titleEditorRef}
               >
                 <input
                   className="title-editor-input"
@@ -1623,6 +1924,12 @@ function ScenarioCard({
             ) : (
               <>
                 <strong>{title}</strong>
+                {run?.status === 'failed' && run?.error ? (
+                  <span className="run-warning-anchor" tabIndex={0}>
+                    <WarningIcon />
+                    <span className="run-warning-tooltip">{formatRunWarningTooltip(run.error)}</span>
+                  </span>
+                ) : null}
                 {!compareMode ? (
                   <button
                     className="rename-toggle"
@@ -1638,7 +1945,7 @@ function ScenarioCard({
               </>
             )}
           </div>
-          <span>{describeDraftConfig(config)}</span>
+          <span>{describeDraftSummary(config, run)}</span>
         </div>
 
         <div className="scenario-actions" onClick={(event) => event.stopPropagation()}>
@@ -1667,14 +1974,48 @@ function ScenarioCard({
               >
                 <IconAsset className="button-icon" src={settingsIconMidnight} />
               </button>
-              <button
-                className="play-button"
-                disabled={disabled}
-                onClick={() => onRun(draft.id)}
-                type="button"
-              >
-                {isLaunching ? '…' : '▶'}
-              </button>
+              <div className="play-menu-wrap">
+                <button
+                  className="play-button"
+                  disabled={disabled}
+                  onClick={() => {
+                    if (connectionCount <= 1) {
+                      onRun(draft.id, 'selected');
+                      return;
+                    }
+
+                    setShowRunMenu((open) => !open);
+                  }}
+                  type="button"
+                >
+                  {isLaunching ? '…' : '▶'}
+                </button>
+
+                {showRunMenu && connectionCount > 1 ? (
+                  <div className="play-menu">
+                    <button
+                      className="play-menu-option"
+                      onClick={() => {
+                        setShowRunMenu(false);
+                        onRun(draft.id, 'selected');
+                      }}
+                      type="button"
+                    >
+                      {`Run on ${selectedConnectionName ?? 'selected connection'}`}
+                    </button>
+                    <button
+                      className="play-menu-option"
+                      onClick={() => {
+                        setShowRunMenu(false);
+                        onRun(draft.id, 'all');
+                      }}
+                      type="button"
+                    >
+                      Run on all connections
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </>
           ) : run?.status !== 'completed' ? (
             <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
@@ -1732,7 +2073,9 @@ function ScenarioList({
   canOpenCompareMode,
   compareMode,
   compareView,
+  connections,
   drafts,
+  hasRunningRuns,
   onClear,
   onCompareSelected,
   onRename,
@@ -1741,10 +2084,10 @@ function ScenarioList({
   onToggleCompareSelection,
   onNewTest,
   scenarios,
-  runningRun,
   runById,
   runPendingDraftId,
   selectedComparisonRunIds,
+  selectedConnectionName,
   selectedDraftId,
   onConfigChange,
   onRun,
@@ -1837,7 +2180,8 @@ function ScenarioList({
                   selectedComparisonRunIds.length >= 5 && !selectedComparisonRunIds.includes(run?.id)
                 }
                 config={draft.config}
-                disabled={Boolean(runningRun) || runPendingDraftId !== null}
+                connectionCount={connections.length}
+                disabled={hasRunningRuns || runPendingDraftId !== null}
                 draft={draft}
                 isCustomizing={draft.isCustomizing}
                 isLaunching={runPendingDraftId === draft.id}
@@ -1854,6 +2198,7 @@ function ScenarioList({
                 progress={run?.metrics.progress_pct ?? 0}
                 run={run}
                 scenario={scenario}
+                selectedConnectionName={selectedConnectionName}
               />
             );
           })
@@ -2278,6 +2623,7 @@ function DraftPreviewPanel({ draft, scenario }) {
 
 function ComparePanel({ comparedRuns }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState({});
 
   if (comparedRuns.length < 2) {
     return (
@@ -2295,6 +2641,7 @@ function ComparePanel({ comparedRuns }) {
   }
 
   const rows = buildComparisonRows(comparedRuns);
+  const groupedRows = groupComparisonRows(rows);
 
   return (
     <section className="metrics-panel">
@@ -2346,27 +2693,56 @@ function ComparePanel({ comparedRuns }) {
               <tr>
                 <th>Metric</th>
                 {comparedRuns.map(({ draft, run }) => (
-                  <th key={run.id}>{getRunLabel(run, draft)}</th>
+                  <th key={run.id}>
+                    <div className="comparison-run-head">
+                      <span className="comparison-run-title">{getBaseRunLabel(run, draft)}</span>
+                      <span className="comparison-run-connection">
+                        {run.connectionName ?? run.target?.summary ?? '—'}
+                      </span>
+                    </div>
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) =>
-                row.type === 'section' ? (
-                  <tr className="comparison-section-row" key={row.label}>
-                    <td colSpan={comparedRuns.length + 1}>
-                      <span className="comparison-section-label">{row.label}</span>
-                    </td>
-                  </tr>
-                ) : (
-                  <tr className="comparison-data-row" key={row.label}>
-                    <td>{row.label}</td>
-                    {row.values.map((value, index) => (
-                      <td key={`${row.label}-${index}`}>{value}</td>
-                    ))}
-                  </tr>
-                ),
-              )}
+              {groupedRows.map((group) => {
+                const isCollapsed = Boolean(collapsedSections[group.label]);
+
+                return (
+                  <Fragment key={group.label}>
+                    <tr className="comparison-section-row">
+                      <td colSpan={comparedRuns.length + 1}>
+                        <button
+                          className="comparison-section-toggle"
+                          onClick={() =>
+                            setCollapsedSections((current) => ({
+                              ...current,
+                              [group.label]: !current[group.label],
+                            }))
+                          }
+                          type="button"
+                        >
+                          <span className="comparison-section-label">{group.label}</span>
+                          <span className={`disclosure-chevron ${isCollapsed ? '' : 'is-open'}`}>
+                            ▾
+                          </span>
+                        </button>
+                      </td>
+                    </tr>
+
+                    {!isCollapsed
+                      ? group.rows.map((row) => (
+                          <tr className="comparison-data-row" key={row.label}>
+                            <td>{row.label}</td>
+                            {row.values.map((value, index) => (
+                              <td key={`${row.label}-${index}`}>{value}</td>
+                            ))}
+                          </tr>
+                        ))
+                      : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -2635,7 +3011,14 @@ export default function App() {
   const [connectError, setConnectError] = useState('');
   const draftNumberRef = useRef(1);
 
-  const runningRun = appState.runs.find((run) => run.status === 'running') ?? null;
+  const connections = appState.connections ?? [];
+  const selectedConnection =
+    connections.find((connection) => connection.id === appState.selectedConnectionId) ??
+    connections[0] ??
+    null;
+  const runningRuns = appState.runs.filter((run) => run.status === 'running');
+  const hasRunningRuns = runningRuns.length > 0;
+  const runningRun = runningRuns.at(-1) ?? null;
   const latestRun = appState.runs.at(-1) ?? null;
   const scenarioMap = new Map(appState.scenarios.map((scenario) => [scenario.id, scenario]));
   const runById = new Map(appState.runs.map((run) => [run.id, run]));
@@ -2644,12 +3027,12 @@ export default function App() {
   );
   const hasReadyDraft = drafts.some((draft) => !draft.runId);
   const canClear =
-    !runningRun &&
+    !hasRunningRuns &&
     runPendingDraftId === null &&
     (drafts.length > 0 || compareMode || compareView);
   const completedRuns = appState.runs.filter((run) => run.status === 'completed');
   const canOpenCompareMode =
-    completedRuns.length >= 2 && !runningRun && runPendingDraftId === null;
+    completedRuns.length >= 2 && !hasRunningRuns && runPendingDraftId === null;
   const comparedRuns = selectedComparisonRunIds
     .map((runId) => {
       const run = runById.get(runId);
@@ -2678,6 +3061,7 @@ export default function App() {
       id: createDraftId(),
       number,
       name: options.name ?? buildDefaultDraftName(scenario.name, number),
+      connectionId: options.connectionId ?? null,
       scenarioId: scenario.id,
       config: { ...scenario.defaults, ...(options.config ?? {}) },
       isCustomizing: Boolean(options.isCustomizing),
@@ -2704,7 +3088,8 @@ export default function App() {
           ...nextDrafts,
           createDraft(scenario, {
             config: run.scenarioConfig,
-            name: run.displayName,
+            connectionId: run.connectionId,
+            name: run.displayName ?? run.scenarioName,
             runId: run.id,
           }),
         ];
@@ -2816,7 +3201,7 @@ export default function App() {
   }, [setupState.status]);
 
   useEffect(() => {
-    if (!appState.connection && !runningRun) {
+    if (!connections.length && !hasRunningRuns) {
       return;
     }
 
@@ -2829,12 +3214,12 @@ export default function App() {
           });
         })
         .catch(() => {});
-    }, runningRun ? 1000 : 2000);
+    }, hasRunningRuns ? 1000 : 2000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [Boolean(appState.connection), runningRun?.id]);
+  }, [connections.length, hasRunningRuns]);
 
   useEffect(() => {
     fetch('/api/meta')
@@ -2950,11 +3335,9 @@ export default function App() {
       }
 
       startTransition(() => {
-        setAppState((currentState) => ({
-          ...currentState,
-          connection: payload.connection,
-        }));
+        setAppState(payload.state ?? EMPTY_APP_STATE);
       });
+      setFormState(BLANK_CONNECTION_FORM);
     } catch (error) {
       if (error.name === 'AbortError') {
         setConnectError(
@@ -2969,10 +3352,14 @@ export default function App() {
     }
   }
 
-  async function handleDisconnect() {
+  async function handleDisconnect(connectionId) {
     setConnectError('');
     const response = await fetch('/api/disconnect', {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ connectionId }),
     });
     const payload = await response.json();
 
@@ -2982,18 +3369,77 @@ export default function App() {
     }
 
     startTransition(() => {
-      setAppState((currentState) => ({
-        ...currentState,
-        connection: null,
-        activeRunId: null,
-      }));
+      setAppState(payload.state ?? EMPTY_APP_STATE);
     });
     setCompareMode(false);
     setCompareView(false);
     setSelectedComparisonRunIds([]);
   }
 
-  async function handleRun(draftId) {
+  async function handleSelectConnection(connectionId) {
+    setConnectError('');
+
+    try {
+      const response = await fetch('/api/connections/select', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ connectionId }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not select that connection.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+    } catch (error) {
+      setConnectError(error.message);
+    }
+  }
+
+  async function handleRenameConnection(connectionId, name) {
+    setConnectError('');
+
+    try {
+      const response = await fetch(`/api/connections/${connectionId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not rename that connection.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+    } catch (error) {
+      setConnectError(error.message);
+    }
+  }
+
+  function handleOpenRedisInsight(redisInsightUrl) {
+    if (!redisInsightUrl) {
+      return;
+    }
+
+    window.location.assign(redisInsightUrl);
+  }
+
+  function handlePrepareAddConnection() {
+    setFormState(BLANK_CONNECTION_FORM);
+    setConnectError('');
+  }
+
+  async function handleRun(draftId, scope = 'selected') {
     setConnectError('');
     setRunPendingDraftId(draftId);
 
@@ -3012,6 +3458,8 @@ export default function App() {
           scenarioId: draft.scenarioId,
           config: draft.config,
           name: draft.name,
+          scope,
+          connectionId: selectedConnection?.id ?? null,
         }),
       });
 
@@ -3020,28 +3468,62 @@ export default function App() {
         throw new Error(payload.error ?? 'Run failed to start.');
       }
 
-      if (payload.run) {
+      if (payload.runs?.length) {
         startTransition(() => {
-          setAppState((currentState) => ({
-            ...currentState,
-            activeRunId: payload.run.id,
-            runs: upsertRun(currentState.runs, payload.run),
-          }));
+          setAppState((currentState) => {
+            let runs = currentState.runs;
+            for (const run of payload.runs) {
+              runs = upsertRun(runs, run);
+            }
+
+            return {
+              ...currentState,
+              activeRunIds: getActiveRunIdsFromRuns(runs),
+              runs,
+            };
+          });
         });
       }
 
-      setDrafts((currentDrafts) =>
-        currentDrafts.map((entry) =>
-          entry.id === draftId
-            ? {
-                ...entry,
-                isCustomizing: false,
-                runId: payload.runId,
-              }
-            : entry,
-        ),
-      );
-      setSelectedDraftId(draftId);
+      if (scope === 'all' && payload.runs?.length) {
+        const scenario = scenarioMap.get(draft.scenarioId);
+        const preferredRun =
+          payload.runs.find((run) => run.connectionId === selectedConnection?.id) ?? payload.runs[0];
+
+        if (scenario) {
+          const generatedDrafts = payload.runs.map((run) =>
+            createDraft(scenario, {
+              config: run.scenarioConfig,
+              connectionId: run.connectionId,
+              name: draft.name,
+              runId: run.id,
+            }),
+          );
+
+          setDrafts((currentDrafts) => [
+            ...generatedDrafts,
+            ...currentDrafts.filter((entry) => entry.id !== draftId),
+          ]);
+
+          const preferredDraft = generatedDrafts.find((entry) => entry.runId === preferredRun?.id);
+          setSelectedDraftId(preferredDraft?.id ?? draftId);
+        }
+      } else {
+        const nextRun = payload.runs?.[0] ?? null;
+        setDrafts((currentDrafts) =>
+          currentDrafts.map((entry) =>
+            entry.id === draftId
+              ? {
+                  ...entry,
+                  connectionId: nextRun?.connectionId ?? entry.connectionId,
+                  isCustomizing: false,
+                  runId: nextRun?.id ?? entry.runId,
+                }
+              : entry,
+          ),
+        );
+        setSelectedDraftId(draftId);
+      }
     } catch (error) {
       setConnectError(error.message);
     } finally {
@@ -3051,7 +3533,11 @@ export default function App() {
 
   const validationError = validateConnectionForm(formState);
   const connectDisabled =
-    Boolean(validationError) || connectPending || setupState.status !== 'ready';
+    Boolean(validationError) ||
+    connectPending ||
+    setupState.status !== 'ready' ||
+    hasRunningRuns ||
+    connections.length >= 3;
 
   async function handleRetrySetup() {
     try {
@@ -3105,7 +3591,7 @@ export default function App() {
   }
 
   function handleNewTest(scenarioId) {
-    if (hasReadyDraft || !appState.scenarios.length) {
+    if (hasReadyDraft || !appState.scenarios.length || !connections.length) {
       return;
     }
 
@@ -3197,19 +3683,24 @@ export default function App() {
       <TopBar
         connectDisabled={connectDisabled}
         connectPending={connectPending}
-        connection={appState.connection}
+        connections={connections}
         formState={formState}
+        hasRunningRuns={hasRunningRuns}
         onConnect={handleConnect}
         onDisconnect={handleDisconnect}
         onFormChange={handleFormChange}
-        runningRun={runningRun}
+        onPrepareAddConnection={handlePrepareAddConnection}
+        onOpenRedisInsight={handleOpenRedisInsight}
+        onRenameConnection={handleRenameConnection}
+        onSelectConnection={handleSelectConnection}
+        selectedConnectionId={selectedConnection?.id ?? null}
         setup={setupState}
       />
       {connectError || validationError ? (
         <div className="error-banner">{connectError || validationError}</div>
       ) : null}
 
-      {appState.connection ? (
+      {connections.length ? (
         <main className="workspace">
           <ScenarioList
             canCreateDraft={!hasReadyDraft}
@@ -3217,7 +3708,9 @@ export default function App() {
             canOpenCompareMode={canOpenCompareMode}
             compareMode={compareMode}
             compareView={compareView}
+            connections={connections}
             drafts={drafts}
+            hasRunningRuns={hasRunningRuns}
             onClear={handleClear}
             onCompareSelected={handleCompareSelected}
             onRename={handleRenameDraft}
@@ -3231,9 +3724,9 @@ export default function App() {
             onToggleCustomize={handleToggleCustomize}
             runById={runById}
             runPendingDraftId={runPendingDraftId}
-            runningRun={runningRun}
             scenarioMap={scenarioMap}
             selectedComparisonRunIds={selectedComparisonRunIds}
+            selectedConnectionName={selectedConnection?.name ?? null}
             selectedDraftId={selectedDraftId}
           />
 

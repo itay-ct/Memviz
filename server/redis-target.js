@@ -120,6 +120,30 @@ export function buildRedisUrl(target, { redactPassword = false } = {}) {
   return `${scheme}://${auth}${target.host}:${target.port}/${database}`;
 }
 
+export function buildRedisInsightUrl(target, { databaseAlias } = {}) {
+  const scheme = target.tls ? 'rediss' : 'redis';
+  const database = Number.isInteger(target.db) ? target.db : 0;
+  const encodedUser = encodeURIComponent(target.username || DEFAULT_USERNAME);
+  const encodedPassword = encodeURIComponent(target.password ?? '');
+  const auth =
+    target.password !== undefined && target.password !== ''
+      ? `${encodedUser}:${encodedPassword}@`
+      : target.username
+        ? `${encodedUser}@`
+        : '';
+
+  const params = new URLSearchParams({
+    redisUrl: `${scheme}://${auth}${target.host}:${target.port}/${database}`,
+    redirect: '/browser',
+  });
+
+  if (databaseAlias) {
+    params.set('databaseAlias', databaseAlias);
+  }
+
+  return `redisinsight://databases/connect?${params.toString()}`;
+}
+
 export function buildMemtierConnectionArgs(target) {
   if (!target.hasAuth && !target.tls && (target.db ?? 0) === 0) {
     return ['--host', target.host, '--port', String(target.port)];

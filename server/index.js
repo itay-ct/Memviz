@@ -7,26 +7,33 @@ import express from 'express';
 import { createClient } from 'redis';
 import { WebSocket, WebSocketServer } from 'ws';
 
-import { buildRedisUrl, normalizeRedisTarget, serializeConnectionTarget } from './redis-target.js';
+import { buildRedisUrl, normalizeRedisTarget } from './redis-target.js';
 import { buildRunnableScenario, scenarios, getScenarioById } from './scenarios.js';
 import {
   appendLog,
-  clearConnectionTarget,
   clearRuns,
+  createConnection,
   createRun,
   finishRun,
-  getActiveRunId,
-  getConnectionTarget,
+  getConnection,
+  getConnections,
   getRun,
+  getRunningRuns,
+  getSelectedConnection,
   getStateSnapshot,
+  hasRunningRuns,
   recordMetric,
   recordSummaryLine,
+  removeConnection,
+  renameConnection,
+  selectConnection,
   serializeRun,
-  setConnectionTarget,
+  updateConnectionRtt,
 } from './store.js';
 import {
   buildMemtierCommand,
   launchMemtier,
+  measureConnectionLatency,
   MEMTIER_REPO_URL,
   MIN_MEMTIER_VERSION,
   resolveMemtierRuntime,
@@ -45,9 +52,25 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(projectRoot, 'dist');
 const REDIS_CONNECT_TIMEOUT_MS = 3000;
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const APP_PORT = Number(process.env.PORT ?? 3000);
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
+const MAX_CONNECTIONS = 3;
+const DEFAULT_TARGET_INPUT = {
+  hostOrUrl: '127.0.0.1',
+  port: '6379',
+  username: 'default',
+  password: '',
+};
+const DEFAULT_TARGET_NAME = '127.0.0.1:6379';
+let attemptedDefaultConnectionBootstrap = false;
+const rttProbeConnectionIds = new Set();
+const FATAL_MEMTIER_PATTERNS = [
+  {
+    regex: /max number of clients reached/i,
+    message: (line) => `Redis refused benchmark connections: ${line}`,
+  },
+];
 
 app.use(express.json());
 
@@ -59,6 +82,10 @@ const setupManager = createSetupManager({
       type: 'setup_state',
       setup,
     });
+
+    if (setup.status === 'ready') {
+      void bootstrapDefaultConnectionIfAvailable();
+    }
   },
 });
 
@@ -80,6 +107,24 @@ function sendSnapshot(socket) {
       scenarios,
     }),
   );
+}
+
+function broadcastState() {
+  broadcast({
+    type: 'snapshot',
+    state: getStateSnapshot(),
+    scenarios,
+  });
+}
+
+function classifyFatalMemtierLine(text) {
+  for (const pattern of FATAL_MEMTIER_PATTERNS) {
+    if (pattern.regex.test(text)) {
+      return pattern.message(text);
+    }
+  }
+
+  return null;
 }
 
 async function verifyRedisConnection(target) {
@@ -123,6 +168,61 @@ async function verifyRedisConnection(target) {
     } else if (typeof client.destroy === 'function') {
       client.destroy();
     }
+  }
+}
+
+async function startConnectionRttProbe(connectionId) {
+  if (rttProbeConnectionIds.has(connectionId)) {
+    return;
+  }
+
+  const connection = getConnection(connectionId);
+  if (!connection) {
+    return;
+  }
+
+  rttProbeConnectionIds.add(connectionId);
+
+  try {
+    const runtime = await resolveMemtierRuntime();
+    const rttMs = await measureConnectionLatency({
+      runtime,
+      target: connection.target,
+    });
+    const updatedConnection = updateConnectionRtt(connectionId, rttMs);
+    if (updatedConnection) {
+      broadcastState();
+    }
+  } catch (error) {
+    console.warn(`RTT probe failed for ${connection.target.summary}: ${error.message}`);
+  } finally {
+    rttProbeConnectionIds.delete(connectionId);
+  }
+}
+
+async function bootstrapDefaultConnectionIfAvailable() {
+  if (attemptedDefaultConnectionBootstrap) {
+    return;
+  }
+
+  attemptedDefaultConnectionBootstrap = true;
+
+  if (getConnections().length > 0) {
+    return;
+  }
+
+  try {
+    const target = normalizeRedisTarget(DEFAULT_TARGET_INPUT);
+    await verifyRedisConnection(target);
+    const connection = createConnection({
+      id: randomUUID(),
+      name: DEFAULT_TARGET_NAME,
+      target,
+    });
+    broadcastState();
+    void startConnectionRttProbe(connection.id);
+  } catch {
+    // Leave the workspace disconnected when local Redis is unavailable.
   }
 }
 
@@ -188,7 +288,7 @@ app.post('/api/connect', async (req, res) => {
     return;
   }
 
-  if (getActiveRunId()) {
+  if (hasRunningRuns()) {
     res.status(409).json({
       success: false,
       error: 'Wait for the current benchmark run to finish before changing targets.',
@@ -196,15 +296,28 @@ app.post('/api/connect', async (req, res) => {
     return;
   }
 
+  if (getConnections().length >= MAX_CONNECTIONS) {
+    res.status(409).json({
+      success: false,
+      error: `You can keep up to ${MAX_CONNECTIONS} Redis connections at once.`,
+    });
+    return;
+  }
+
   try {
     const target = normalizeRedisTarget(req.body);
     await verifyRedisConnection(target);
-    setConnectionTarget(target);
+    const connection = createConnection({
+      id: randomUUID(),
+      name: req.body?.name,
+      target,
+    });
 
-    const connection = serializeConnectionTarget(target);
-    broadcast({ type: 'connection', connection });
+    const state = toPublicState();
+    broadcastState();
+    void startConnectionRttProbe(connection.id);
 
-    res.json({ success: true, connection });
+    res.json({ success: true, connection, state });
   } catch (error) {
     withStatus(res, error).json({
       success: false,
@@ -213,8 +326,40 @@ app.post('/api/connect', async (req, res) => {
   }
 });
 
-app.post('/api/disconnect', (_req, res) => {
-  if (getActiveRunId()) {
+app.post('/api/connections/select', (req, res) => {
+  const connection = selectConnection(req.body?.connectionId);
+
+  if (!connection) {
+    res.status(404).json({
+      success: false,
+      error: 'Connection not found.',
+    });
+    return;
+  }
+
+  const state = toPublicState();
+  broadcastState();
+  res.json({ success: true, connection, state });
+});
+
+app.patch('/api/connections/:id', (req, res) => {
+  const connection = renameConnection(req.params.id, req.body?.name);
+
+  if (!connection) {
+    res.status(404).json({
+      success: false,
+      error: 'Connection not found.',
+    });
+    return;
+  }
+
+  const state = toPublicState();
+  broadcastState();
+  res.json({ success: true, connection, state });
+});
+
+app.post('/api/disconnect', (req, res) => {
+  if (hasRunningRuns()) {
     res.status(409).json({
       success: false,
       error: 'Disconnect is disabled while a benchmark is running.',
@@ -222,13 +367,22 @@ app.post('/api/disconnect', (_req, res) => {
     return;
   }
 
-  clearConnectionTarget();
-  broadcast({ type: 'disconnected' });
-  res.json({ success: true });
+  const connection = removeConnection(req.body?.connectionId);
+  if (!connection) {
+    res.status(404).json({
+      success: false,
+      error: 'Connection not found.',
+    });
+    return;
+  }
+
+  const state = toPublicState();
+  broadcastState();
+  res.json({ success: true, connection, state });
 });
 
 app.post('/api/clear', (_req, res) => {
-  if (getActiveRunId()) {
+  if (hasRunningRuns()) {
     res.status(409).json({
       success: false,
       error: 'Clear is disabled while a benchmark is running.',
@@ -255,8 +409,8 @@ app.post('/api/run', async (req, res) => {
     return;
   }
 
-  const target = getConnectionTarget();
-  if (!target) {
+  const selectedConnection = getSelectedConnection();
+  if (!selectedConnection) {
     res.status(409).json({
       success: false,
       error: 'Connect to Redis before starting a benchmark.',
@@ -264,7 +418,7 @@ app.post('/api/run', async (req, res) => {
     return;
   }
 
-  if (getActiveRunId()) {
+  if (hasRunningRuns()) {
     res.status(409).json({
       success: false,
       error: 'Only one benchmark run can be active at a time.',
@@ -292,6 +446,20 @@ app.post('/api/run', async (req, res) => {
     return;
   }
 
+  const runScope = req.body?.scope === 'all' ? 'all' : 'selected';
+  const connections =
+    runScope === 'all'
+      ? getConnections()
+      : [getConnection(req.body?.connectionId) ?? selectedConnection].filter(Boolean);
+
+  if (!connections.length) {
+    res.status(409).json({
+      success: false,
+      error: 'Pick a Redis connection before starting a benchmark.',
+    });
+    return;
+  }
+
   let runtime;
   try {
     runtime = await resolveMemtierRuntime();
@@ -303,102 +471,154 @@ app.post('/api/run', async (req, res) => {
     return;
   }
 
-  const runId = randomUUID();
-  const { command, args, displayCommand, runtime: runtimeDetails } = buildMemtierCommand({
-    runLabel: runId,
-    runtime,
-    scenario,
-    target,
-  });
+  const runs = connections.map((connection) => {
+    const runId = randomUUID();
+    const { command, args, displayCommand, runtime: runtimeDetails } = buildMemtierCommand({
+      runLabel: runId,
+      runtime,
+      scenario,
+      target: connection.target,
+    });
 
-  const run = createRun({
-    id: runId,
-    label: runId,
-    displayName: req.body?.name ?? null,
-    scenario,
-    target,
-    command: displayCommand,
-  });
+    const run = createRun({
+      id: runId,
+      label: runId,
+      displayName: req.body?.name ?? null,
+      scenario,
+      connection,
+      command: displayCommand,
+    });
 
-  appendLog(runId, {
-    stream: 'meta',
-    text: `Runner: ${runtimeDetails.label}`,
-  });
+    appendLog(runId, {
+      stream: 'meta',
+      text: `Runner: ${runtimeDetails.label}`,
+    });
+    appendLog(runId, {
+      stream: 'meta',
+      text: `Target: ${connection.name} (${connection.target.summary})`,
+    });
+    appendLog(runId, {
+      stream: 'meta',
+      text: `Launching ${displayCommand}`,
+    });
 
-  appendLog(runId, {
-    stream: 'meta',
-    text: `Launching ${displayCommand}`,
-  });
+    broadcast({
+      type: 'run_started',
+      run: serializeRun(run),
+    });
 
-  broadcast({
-    type: 'run_started',
-    run: serializeRun(run),
-  });
-
-  let settled = false;
-  const settle = ({ status, exitCode = null, error = null }) => {
-    if (settled) {
-      return;
-    }
-
-    settled = true;
-    const completedRun = finishRun(runId, { status, exitCode, error });
-    if (completedRun) {
-      broadcast({
-        type: 'run_finished',
-        run: serializeRun(completedRun),
-      });
-    }
-  };
-
-  launchMemtier({
-    command,
-    args,
-    onLine: ({ stream, text }) => {
-      const entry = appendLog(runId, { stream, text });
-      if (stream === 'stdout') {
-        recordSummaryLine(runId, text);
-      }
-      if (entry) {
-        broadcast({
-          type: 'log',
-          runId,
-          entry,
-        });
-      }
-    },
-    onError: (error) => {
-      appendLog(runId, {
-        stream: 'stderr',
-        text: error.message,
-      });
-      settle({
-        status: 'failed',
-        error: `Unable to start memtier_benchmark. ${error.message}`,
-      });
-    },
-    onExit: ({ code, signal }) => {
-      if (code === 0) {
-        settle({ status: 'completed', exitCode: 0 });
+    let settled = false;
+    let child = null;
+    let fatalAbortMessage = null;
+    const settle = ({ status, exitCode = null, error = null }) => {
+      if (settled) {
         return;
       }
 
-      const error = signal
-        ? `memtier_benchmark exited with signal ${signal}.`
-        : `memtier_benchmark exited with code ${code}.`;
+      settled = true;
+      const completedRun = finishRun(runId, { status, exitCode, error });
+      if (completedRun) {
+        broadcast({
+          type: 'run_finished',
+          run: serializeRun(completedRun),
+        });
+      }
+    };
 
-      settle({
-        status: 'failed',
-        exitCode: code,
-        error,
-      });
-    },
+    child = launchMemtier({
+      command,
+      args,
+      onLine: ({ stream, text }) => {
+        const entry = appendLog(runId, { stream, text });
+        if (stream === 'stdout') {
+          recordSummaryLine(runId, text);
+        }
+        if (entry) {
+          broadcast({
+            type: 'log',
+            runId,
+            entry,
+          });
+        }
+
+        if (stream === 'stderr' && !fatalAbortMessage) {
+          const classifiedError = classifyFatalMemtierLine(text);
+          if (classifiedError) {
+            fatalAbortMessage = classifiedError;
+
+            const abortEntry = appendLog(runId, {
+              stream: 'meta',
+              text: `Failing fast: ${classifiedError}`,
+            });
+
+            if (abortEntry) {
+              broadcast({
+                type: 'log',
+                runId,
+                entry: abortEntry,
+              });
+            }
+
+            settle({
+              status: 'failed',
+              error: classifiedError,
+            });
+
+            if (child && !child.killed) {
+              child.kill('SIGTERM');
+              setTimeout(() => {
+                if (!child.killed) {
+                  child.kill('SIGKILL');
+                }
+              }, 1000).unref();
+            }
+          }
+        }
+      },
+      onError: (error) => {
+        appendLog(runId, {
+          stream: 'stderr',
+          text: error.message,
+        });
+        settle({
+          status: 'failed',
+          error: `Unable to start memtier_benchmark. ${error.message}`,
+        });
+      },
+      onExit: ({ code, signal }) => {
+        if (fatalAbortMessage) {
+          settle({
+            status: 'failed',
+            exitCode: code,
+            error: fatalAbortMessage,
+          });
+          return;
+        }
+
+        if (code === 0) {
+          settle({ status: 'completed', exitCode: 0 });
+          return;
+        }
+
+        const error = signal
+          ? `memtier_benchmark exited with signal ${signal}.`
+          : `memtier_benchmark exited with code ${code}.`;
+
+        settle({
+          status: 'failed',
+          exitCode: code,
+          error,
+        });
+      },
+    });
+
+    return serializeRun(run);
   });
 
   res.status(202).json({
     success: true,
-    runId,
-    run: serializeRun(run),
+    runIds: runs.map((run) => run.id),
+    runs,
   });
 });
 
@@ -469,22 +689,24 @@ createStatsdReceiver({
   },
   onError: (error) => {
     console.error(`StatsD listener error on ${STATSD_HOST}:${STATSD_PORT}: ${error.message}`);
-    const activeRunId = getActiveRunId();
-    if (!activeRunId) {
+    const runningRuns = getRunningRuns();
+    if (!runningRuns.length) {
       return;
     }
 
-    const entry = appendLog(activeRunId, {
-      stream: 'stderr',
-      text: `StatsD listener error: ${error.message}`,
-    });
-
-    if (entry) {
-      broadcast({
-        type: 'log',
-        runId: activeRunId,
-        entry,
+    for (const run of runningRuns) {
+      const entry = appendLog(run.id, {
+        stream: 'stderr',
+        text: `StatsD listener error: ${error.message}`,
       });
+
+      if (entry) {
+        broadcast({
+          type: 'log',
+          runId: run.id,
+          entry,
+        });
+      }
     }
   },
 });

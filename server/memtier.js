@@ -83,6 +83,25 @@ function buildInnerMemtierArgs({ runLabel, scenario, statsdHost, target }) {
   ];
 }
 
+function buildPingProbeArgs(target) {
+  return [
+    '--protocol',
+    'redis',
+    ...buildMemtierConnectionArgs(target),
+    '--clients',
+    '1',
+    '--threads',
+    '1',
+    '--test-time',
+    '2',
+    '--hide-histogram',
+    '--command',
+    'PING',
+    '--command-ratio',
+    '1',
+  ];
+}
+
 function isLoopbackHost(host) {
   return ['127.0.0.1', 'localhost', '::1'].includes(host.toLowerCase());
 }
@@ -177,6 +196,50 @@ function buildDockerCommand({ runLabel, scenario, target }) {
     args,
     displayCommand: `docker ${displayArgs.map((arg) => shellQuote(arg)).join(' ')}`,
   };
+}
+
+function buildLocalPingProbeCommand(target) {
+  const args = buildPingProbeArgs(target);
+
+  return {
+    command: 'memtier_benchmark',
+    args,
+  };
+}
+
+function buildDockerPingProbeCommand(target) {
+  const dockerTarget = toDockerReachableTarget(target);
+  const containerArgs = buildPingProbeArgs(dockerTarget);
+
+  return {
+    command: 'docker',
+    args: ['run', '--rm', ...getDockerHostFlags(), DOCKER_IMAGE, ...containerArgs],
+  };
+}
+
+function parseProbeAverageLatency(output) {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (!/^Totals\s+/i.test(line)) {
+      continue;
+    }
+
+    const parts = line.split(/\s{2,}/);
+    if (parts.length < 3) {
+      continue;
+    }
+
+    const averageLatency = Number(parts[2]);
+    if (Number.isFinite(averageLatency)) {
+      return averageLatency;
+    }
+  }
+
+  return null;
 }
 
 function captureProcessOutput(command, args) {
@@ -396,6 +459,24 @@ export function buildMemtierCommand({ runLabel, runtime, scenario, target }) {
   }
 
   return buildLocalCommand({ runLabel, scenario, target });
+}
+
+export async function measureConnectionLatency({ runtime, target }) {
+  const probeCommand = runtime.kind === 'docker'
+    ? buildDockerPingProbeCommand(target)
+    : buildLocalPingProbeCommand(target);
+  const { code, output } = await captureProcessOutput(probeCommand.command, probeCommand.args);
+
+  if (code !== 0) {
+    throw new Error(`Latency probe exited with code ${code}.`);
+  }
+
+  const averageLatency = parseProbeAverageLatency(output);
+  if (!Number.isFinite(averageLatency)) {
+    throw new Error('Could not parse latency probe output.');
+  }
+
+  return averageLatency;
 }
 
 function wireStream(stream, streamName, onLine) {
