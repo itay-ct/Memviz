@@ -2024,6 +2024,27 @@ input:disabled {
   font-size: 0.78rem;
 }
 
+.compare-chart-tooltip {
+  min-width: 220px;
+}
+
+.compare-tooltip-list {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.compare-tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.compare-tooltip-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .summary-panel {
   margin-top: 1rem;
 }
@@ -2086,6 +2107,18 @@ input:disabled {
 
 .compare-table-panel {
   margin-top: 1.2rem;
+}
+
+.compare-charts-section {
+  margin-top: 1rem;
+}
+
+.compare-chart-grid {
+  margin-top: 0.75rem;
+}
+
+.compare-chart-panel .eyebrow {
+  color: rgba(251, 248, 241, 0.62);
 }
 
 .comparison-table {
@@ -2151,7 +2184,6 @@ input:disabled {
 }
 
 .comparison-run-title {
-  color: rgba(251, 248, 241, 0.88);
   font-size: 0.88rem;
   font-weight: 700;
   letter-spacing: normal;
@@ -2164,6 +2196,11 @@ input:disabled {
   font-weight: 500;
   letter-spacing: 0.02em;
   text-transform: none;
+}
+
+.compare-section-header {
+  display: flex;
+  align-items: center;
 }
 
 .export-actions {

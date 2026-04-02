@@ -196,6 +196,8 @@ export function createRun({ command, connection, displayName = null, id, label, 
     series: {
       ops_sec: [],
       latency_ms: [],
+      latency_p50: [],
+      latency_p90: [],
       latency_p99: [],
       bytes_sec: [],
       connections: [],
@@ -255,6 +257,8 @@ export function recordMetric(runId, { metric, value, timestamp }) {
   if (
     metric === 'ops_sec' ||
     metric === 'latency_ms' ||
+    metric === 'latency_p50' ||
+    metric === 'latency_p90' ||
     metric === 'latency_p99' ||
     metric === 'bytes_sec' ||
     metric === 'connections' ||
@@ -313,6 +317,8 @@ export function serializeRun(run, { includeLogs = true } = {}) {
     series: {
       ops_sec: [...run.series.ops_sec],
       latency_ms: [...run.series.latency_ms],
+      latency_p50: [...run.series.latency_p50],
+      latency_p90: [...run.series.latency_p90],
       latency_p99: [...run.series.latency_p99],
       bytes_sec: [...run.series.bytes_sec],
       connections: [...run.series.connections],

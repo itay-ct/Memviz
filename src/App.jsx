@@ -114,6 +114,8 @@ const EMPTY_SETUP_STATE = {
   logs: [],
 };
 
+const COMPARE_CHART_COLORS = ['#81DBFF', '#C895E3', '#DDFF21'];
+
 function upsertRun(runs, nextRun) {
   const existingRunIndex = runs.findIndex((run) => run.id === nextRun.id);
   if (existingRunIndex === -1) {
@@ -553,13 +555,35 @@ function getSeriesAverage(points) {
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
+function getAverageOfNumbers(values) {
+  const numericValues = (values ?? []).filter(
+    (value) => value !== null && value !== undefined && !Number.isNaN(value),
+  );
+
+  if (!numericValues.length) {
+    return null;
+  }
+
+  return numericValues.reduce((total, value) => total + value, 0) / numericValues.length;
+}
+
 function getDisplaySeries(run, key) {
   const points = run?.series?.[key] ?? [];
   if (!run || run.status === 'running') {
     return points;
   }
 
-  if (['ops_sec', 'bytes_sec', 'connections', 'latency_p99'].includes(key)) {
+  if (
+    [
+      'ops_sec',
+      'bytes_sec',
+      'connections',
+      'latency_ms',
+      'latency_p50',
+      'latency_p90',
+      'latency_p99',
+    ].includes(key)
+  ) {
     return trimTerminalResetPoints(points);
   }
 
@@ -1023,12 +1047,104 @@ async function downloadRunPdf(element, runTitle) {
   pdf.save(`${sanitizeFilename(runTitle)}.pdf`);
 }
 
+async function downloadComparisonPdf(element) {
+  await downloadRunPdf(element, `memviz-compare-${Date.now()}`);
+}
+
 function buildChartData(points) {
   return points.slice(-90).map((point, index) => ({
     index: index + 1,
     label: formatShortTime(point.timestamp),
     timestamp: point.timestamp,
     value: point.value,
+  }));
+}
+
+function getCompareColor(index) {
+  return COMPARE_CHART_COLORS[index % COMPARE_CHART_COLORS.length];
+}
+
+function canCompareRunTimelines(comparedRuns) {
+  if (comparedRuns.length < 2) {
+    return false;
+  }
+
+  const firstLimitMode = comparedRuns[0]?.run?.scenarioConfig?.limitMode;
+  const firstTestTime = comparedRuns[0]?.run?.scenarioConfig?.testTime;
+
+  if (firstLimitMode !== 'time' || !Number.isFinite(firstTestTime)) {
+    return false;
+  }
+
+  return comparedRuns.every(
+    ({ run }) =>
+      run?.scenarioConfig?.limitMode === 'time' && run?.scenarioConfig?.testTime === firstTestTime,
+  );
+}
+
+function getCompareMetricDefinitions(kind) {
+  if (kind === 'throughput') {
+    return [
+      { key: 'ops_sec', label: 'ops/sec', formatter: formatOpsPerSecond },
+      { key: 'bytes_sec', label: 'bytes/sec', formatter: formatBytesPerSecond },
+    ];
+  }
+
+  return [
+    { key: 'latency_ms', label: 'average', formatter: formatLatency },
+    { key: 'latency_p50', label: 'p50', formatter: formatLatency },
+    { key: 'latency_p90', label: 'p90', formatter: formatLatency },
+    { key: 'latency_p99', label: 'p99', formatter: formatLatency },
+  ];
+}
+
+function getCompareSeriesPoints(run, metricKey) {
+  return getDisplaySeries(run, metricKey);
+}
+
+function buildCompareTimelineData(comparedRuns, metricKey) {
+  const secondMap = new Map();
+
+  comparedRuns.forEach(({ run }, index) => {
+    const dataKey = `series_${index}`;
+    const startedAtMs = run?.startedAt ? new Date(run.startedAt).getTime() : Number.NaN;
+
+    getCompareSeriesPoints(run, metricKey).forEach((point) => {
+      const pointMs = point?.timestamp ? new Date(point.timestamp).getTime() : Number.NaN;
+      if (!Number.isFinite(startedAtMs) || !Number.isFinite(pointMs)) {
+        return;
+      }
+
+      const second = Math.max(0, Math.round((pointMs - startedAtMs) / 1000));
+      if (!secondMap.has(second)) {
+        secondMap.set(second, {
+          second,
+          label: `${second}s`,
+        });
+      }
+
+      secondMap.get(second)[dataKey] = point.value;
+    });
+  });
+
+  return Array.from(secondMap.values())
+    .sort((left, right) => left.second - right.second)
+    .slice(-180);
+}
+
+function getCompareMetricSummaryValue(run, metricKey) {
+  const series = getCompareSeriesPoints(run, metricKey);
+  return getSeriesAverage(series);
+}
+
+function buildCompareMetricOptions(comparedRuns, kind) {
+  return getCompareMetricDefinitions(kind).map((definition) => ({
+    ...definition,
+    value: getAverageOfNumbers(
+      comparedRuns
+        .map(({ run }) => getCompareMetricSummaryValue(run, definition.key))
+        .filter((value) => value !== null && value !== undefined && !Number.isNaN(value)),
+    ),
   }));
 }
 
@@ -2267,6 +2383,39 @@ function RealtimeTooltip({ formatter, active, label, payload }) {
   );
 }
 
+function CompareRealtimeTooltip({ active, formatter, label, payload, seriesMeta }) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const visiblePayload = seriesMeta
+    .map((series) => ({
+      ...series,
+      point: payload.find((entry) => entry.dataKey === series.dataKey),
+    }))
+    .filter((entry) => entry.point && entry.point.value !== null && entry.point.value !== undefined);
+
+  if (!visiblePayload.length) {
+    return null;
+  }
+
+  return (
+    <div className="chart-tooltip compare-chart-tooltip">
+      <span>{label}</span>
+      <div className="compare-tooltip-list">
+        {visiblePayload.map((entry) => (
+          <div className="compare-tooltip-row" key={entry.dataKey}>
+            <span className="compare-tooltip-name" style={{ color: entry.color }}>
+              {entry.label}
+            </span>
+            <strong>{formatter(entry.point.value)}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ChartStatPicker({ onChange, options, selectedKey }) {
   const [isOpen, setIsOpen] = useState(false);
   const selected = options.find((option) => option.key === selectedKey) ?? options[0];
@@ -2299,6 +2448,46 @@ function ChartStatPicker({ onChange, options, selectedKey }) {
             >
               <span>{option.label}</span>
               <strong>{formatMetric(option.value, option.formatter)}</strong>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CompareMetricPicker({ onChange, options, selectedKey }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const selected = options.find((option) => option.key === selectedKey) ?? options[0];
+
+  useEffect(() => {
+    setIsOpen(false);
+  }, [selectedKey]);
+
+  return (
+    <div className="chart-stat-picker">
+      <button
+        className="chart-stat-button"
+        onClick={() => setIsOpen((open) => !open)}
+        type="button"
+      >
+        <span className="chart-stat-inline">
+          <span>metric:</span>
+          <strong>{selected?.label ?? '—'}</strong>
+        </span>
+      </button>
+
+      {isOpen ? (
+        <div className="chart-stat-menu">
+          {options.map((option) => (
+            <button
+              className={`chart-stat-option ${option.key === selected?.key ? 'is-active' : ''}`}
+              key={option.key}
+              onClick={() => onChange(option.key)}
+              type="button"
+            >
+              <span>metric</span>
+              <strong>{option.label}</strong>
             </button>
           ))}
         </div>
@@ -2378,6 +2567,91 @@ function TimeseriesChart({
           <div className={`chart-empty chart-empty-${emptyVariant}`}>
             {emptyVariant === 'number' ? <strong>{emptyValue}</strong> : emptyValue}
           </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CompareTimeseriesChart({
+  colorMap,
+  comparedRuns,
+  metricKind,
+  onMetricSelectionChange,
+  selectedMetricKey,
+  title,
+}) {
+  const options = buildCompareMetricOptions(comparedRuns, metricKind);
+  const selectedOption = options.find((option) => option.key === selectedMetricKey) ?? options[0];
+  const data = buildCompareTimelineData(comparedRuns, selectedOption.key);
+  const seriesMeta = comparedRuns.map(({ draft, run }, index) => ({
+    color: colorMap[index],
+    dataKey: `series_${index}`,
+    label: getBaseRunLabel(run, draft),
+  }));
+
+  return (
+    <section className="chart-panel compare-chart-panel">
+      <div className="chart-header">
+        <div className="chart-title-row">
+          <p className="eyebrow">{title}</p>
+        </div>
+        <CompareMetricPicker
+          onChange={onMetricSelectionChange}
+          options={options}
+          selectedKey={selectedMetricKey}
+        />
+      </div>
+
+      <div className="chart-area">
+        {data.length ? (
+          <ResponsiveContainer height={220} width="100%">
+            <LineChart data={data} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
+              <CartesianGrid stroke="rgba(255,255,255,0.08)" vertical={false} />
+              <XAxis
+                axisLine={false}
+                dataKey="second"
+                domain={['dataMin', 'dataMax']}
+                minTickGap={20}
+                tick={{ fill: 'rgba(251,248,241,0.48)', fontSize: 12 }}
+                tickFormatter={(value) => `${value}s`}
+                tickLine={false}
+                type="number"
+              />
+              <YAxis
+                axisLine={false}
+                tick={{ fill: 'rgba(251,248,241,0.48)', fontSize: 12 }}
+                tickFormatter={(value) => selectedOption.formatter(value)}
+                tickLine={false}
+                width={88}
+              />
+              <Tooltip
+                content={
+                  <CompareRealtimeTooltip
+                    formatter={selectedOption.formatter}
+                    seriesMeta={seriesMeta}
+                  />
+                }
+                cursor={{ stroke: '#ffffff', strokeOpacity: 0.18 }}
+              />
+              {seriesMeta.map((series) => (
+                <Line
+                  connectNulls
+                  dataKey={series.dataKey}
+                  dot={false}
+                  isAnimationActive={false}
+                  key={series.dataKey}
+                  stroke={series.color}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={3}
+                  type="monotone"
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="chart-empty">Waiting for samples</div>
         )}
       </div>
     </section>
@@ -2624,6 +2898,10 @@ function DraftPreviewPanel({ draft, scenario }) {
 function ComparePanel({ comparedRuns }) {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({});
+  const [throughputMetricKey, setThroughputMetricKey] = useState('ops_sec');
+  const [latencyMetricKey, setLatencyMetricKey] = useState('latency_p99');
+  const [chartsCollapsed, setChartsCollapsed] = useState(false);
+  const exportRootRef = useRef(null);
 
   if (comparedRuns.length < 2) {
     return (
@@ -2642,9 +2920,28 @@ function ComparePanel({ comparedRuns }) {
 
   const rows = buildComparisonRows(comparedRuns);
   const groupedRows = groupComparisonRows(rows);
+  const canCompareTimelines = canCompareRunTimelines(comparedRuns);
+  const compareColors = comparedRuns.map((_, index) => getCompareColor(index));
+
+  async function handleExportPdf() {
+    const previousCollapsedSections = collapsedSections;
+    const previousChartsCollapsed = chartsCollapsed;
+
+    try {
+      setShowExportMenu(false);
+      setCollapsedSections({});
+      setChartsCollapsed(false);
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      await downloadComparisonPdf(exportRootRef.current);
+    } finally {
+      setCollapsedSections(previousCollapsedSections);
+      setChartsCollapsed(previousChartsCollapsed);
+    }
+  }
 
   return (
-    <section className="metrics-panel">
+    <section className="metrics-panel compare-panel" ref={exportRootRef}>
       <div className="metrics-header">
         <div>
           <div className="title-with-icon">
@@ -2675,7 +2972,7 @@ function ComparePanel({ comparedRuns }) {
               >
                 Export as CSV
               </button>
-              <button className="export-option is-disabled" disabled type="button">
+              <button className="export-option" onClick={handleExportPdf} type="button">
                 Download as PDF
               </button>
               <button className="export-option is-disabled" disabled type="button">
@@ -2686,16 +2983,57 @@ function ComparePanel({ comparedRuns }) {
         </div>
       </div>
 
+      {canCompareTimelines ? (
+        <section className="summary-panel compare-charts-section">
+          <div className="compare-section-header">
+            <button
+              className="comparison-section-toggle"
+              onClick={() => setChartsCollapsed((current) => !current)}
+              type="button"
+            >
+              <span className="comparison-section-label">Timeline charts</span>
+              <span className={`disclosure-chevron ${chartsCollapsed ? '' : 'is-open'}`}>▾</span>
+            </button>
+          </div>
+
+          {!chartsCollapsed ? (
+            <div className="chart-grid-layout chart-grid-layout-primary compare-chart-grid">
+              <CompareTimeseriesChart
+                colorMap={compareColors}
+                comparedRuns={comparedRuns}
+                metricKind="throughput"
+                onMetricSelectionChange={setThroughputMetricKey}
+                selectedMetricKey={throughputMetricKey}
+                title="throughput"
+              />
+              <CompareTimeseriesChart
+                colorMap={compareColors}
+                comparedRuns={comparedRuns}
+                metricKind="latency"
+                onMetricSelectionChange={setLatencyMetricKey}
+                selectedMetricKey={latencyMetricKey}
+                title="latency"
+              />
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <section className="summary-panel compare-table-panel">
         <div className="summary-table-wrap">
           <table className="summary-table comparison-table">
             <thead>
               <tr>
                 <th>Metric</th>
-                {comparedRuns.map(({ draft, run }) => (
+                {comparedRuns.map(({ draft, run }, index) => (
                   <th key={run.id}>
                     <div className="comparison-run-head">
-                      <span className="comparison-run-title">{getBaseRunLabel(run, draft)}</span>
+                      <span
+                        className="comparison-run-title"
+                        style={{ color: compareColors[index] }}
+                      >
+                        {getBaseRunLabel(run, draft)}
+                      </span>
                       <span className="comparison-run-connection">
                         {run.connectionName ?? run.target?.summary ?? '—'}
                       </span>
