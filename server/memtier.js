@@ -16,6 +16,7 @@ export const STATSD_HOST =
 let runtimePromise;
 let localVersionPromise;
 let dockerVersionPromise;
+let dockerHostAddressPromise;
 
 function compareVersions(left, right) {
   const leftParts = String(left ?? '0')
@@ -112,12 +113,60 @@ function getDockerHostFlags() {
     : [];
 }
 
-function toDockerReachableTarget(target) {
+function extractFirstIpv4(output) {
+  const match = output.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+  return match?.[0] ?? null;
+}
+
+async function resolveDockerDesktopHostIpv4() {
+  const override =
+    process.env.MEMVIZ_DOCKER_HOST_IP ??
+    process.env.MEMTIERVIZ_DOCKER_HOST_IP ??
+    process.env.MEMVIZ_DOCKER_HOST_IPV4 ??
+    process.env.MEMTIERVIZ_DOCKER_HOST_IPV4;
+
+  if (override) {
+    return override;
+  }
+
+  if (!dockerHostAddressPromise) {
+    dockerHostAddressPromise = captureProcessOutput('docker', [
+      'run',
+      '--rm',
+      '--entrypoint',
+      'getent',
+      DOCKER_IMAGE,
+      'ahostsv4',
+      'host.docker.internal',
+    ])
+      .then(({ code, output }) => {
+        if (code !== 0) {
+          return null;
+        }
+
+        return extractFirstIpv4(output);
+      })
+      .catch(() => null);
+  }
+
+  return dockerHostAddressPromise;
+}
+
+async function resolveDockerHostAddress() {
+  if (process.platform === 'linux') {
+    return 'host.docker.internal';
+  }
+
+  const dockerDesktopIpv4 = await resolveDockerDesktopHostIpv4();
+  return dockerDesktopIpv4 ?? 'host.docker.internal';
+}
+
+function toDockerReachableTarget(target, dockerHostAddress) {
   return {
     ...target,
-    host: isLoopbackHost(target.host) ? 'host.docker.internal' : target.host,
+    host: isLoopbackHost(target.host) ? dockerHostAddress : target.host,
     summary: isLoopbackHost(target.host)
-      ? `host.docker.internal:${target.port}`
+      ? `${dockerHostAddress}:${target.port}`
       : target.summary,
   };
 }
@@ -156,19 +205,20 @@ function buildLocalCommand({ runLabel, scenario, target }) {
   };
 }
 
-function buildDockerCommand({ runLabel, scenario, target }) {
-  const dockerTarget = toDockerReachableTarget(target);
+async function buildDockerCommand({ runLabel, scenario, target }) {
+  const dockerHostAddress = await resolveDockerHostAddress();
+  const dockerTarget = toDockerReachableTarget(target, dockerHostAddress);
   const containerArgs = buildInnerMemtierArgs({
     runLabel,
     scenario,
-    statsdHost: 'host.docker.internal',
+    statsdHost: dockerHostAddress,
     target: dockerTarget,
   });
 
   const displayContainerArgs = [
     ...buildDisplayArgs(dockerTarget),
     '--statsd-host',
-    'host.docker.internal',
+    dockerHostAddress,
     '--statsd-port',
     String(STATSD_PORT),
     '--statsd-prefix',
@@ -207,8 +257,9 @@ function buildLocalPingProbeCommand(target) {
   };
 }
 
-function buildDockerPingProbeCommand(target) {
-  const dockerTarget = toDockerReachableTarget(target);
+async function buildDockerPingProbeCommand(target) {
+  const dockerHostAddress = await resolveDockerHostAddress();
+  const dockerTarget = toDockerReachableTarget(target, dockerHostAddress);
   const containerArgs = buildPingProbeArgs(dockerTarget);
 
   return {
@@ -389,6 +440,7 @@ export function resetRuntimeResolution() {
   runtimePromise = undefined;
   localVersionPromise = undefined;
   dockerVersionPromise = undefined;
+  dockerHostAddressPromise = undefined;
 }
 
 export function pullDockerImage({ onLine }) {
@@ -453,7 +505,7 @@ export async function resolveMemtierMetadata() {
   };
 }
 
-export function buildMemtierCommand({ runLabel, runtime, scenario, target }) {
+export async function buildMemtierCommand({ runLabel, runtime, scenario, target }) {
   if (runtime.kind === 'docker') {
     return buildDockerCommand({ runLabel, scenario, target });
   }
@@ -463,7 +515,7 @@ export function buildMemtierCommand({ runLabel, runtime, scenario, target }) {
 
 export async function measureConnectionLatency({ runtime, target }) {
   const probeCommand = runtime.kind === 'docker'
-    ? buildDockerPingProbeCommand(target)
+    ? await buildDockerPingProbeCommand(target)
     : buildLocalPingProbeCommand(target);
   const { code, output } = await captureProcessOutput(probeCommand.command, probeCommand.args);
 

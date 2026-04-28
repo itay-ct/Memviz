@@ -30,6 +30,19 @@ const state = {
   runs: new Map(),
 };
 
+function createEmptyLoadState() {
+  return {
+    status: 'idle',
+    progressPct: 0,
+    message: '',
+    error: null,
+    startedAt: null,
+    endedAt: null,
+    presetName: null,
+    summary: null,
+  };
+}
+
 function sanitizeName(name, fallback) {
   const trimmed = String(name ?? '')
     .trim()
@@ -51,6 +64,10 @@ function serializeConnection(connection) {
     redisInsightUrl: buildRedisInsightUrl(connection.target, {
       databaseAlias: connection.name,
     }),
+    load: {
+      ...connection.load,
+      summary: connection.load.summary ? { ...connection.load.summary } : null,
+    },
     ...serializeConnectionTarget(connection.target),
   };
 }
@@ -76,6 +93,7 @@ export function createConnection({ id, name, target }) {
     createdAt: new Date().toISOString(),
     rttMs: null,
     rttWarning: false,
+    load: createEmptyLoadState(),
   };
 
   state.connections.set(id, connection);
@@ -152,8 +170,81 @@ export function getSelectedConnection() {
   return state.connections.get(state.selectedConnectionId) ?? null;
 }
 
+export function hasActiveLoads() {
+  return getOrderedConnections().some((connection) => connection.load.status === 'running');
+}
+
+export function startConnectionLoad(connectionId, { presetName = null } = {}) {
+  const connection = state.connections.get(connectionId);
+  if (!connection) {
+    return null;
+  }
+
+  connection.load = {
+    status: 'running',
+    progressPct: 0,
+    message: 'Preparing dataset',
+    error: null,
+    startedAt: new Date().toISOString(),
+    endedAt: null,
+    presetName,
+    summary: null,
+  };
+
+  return serializeConnection(connection);
+}
+
+export function updateConnectionLoad(connectionId, patch = {}) {
+  const connection = state.connections.get(connectionId);
+  if (!connection) {
+    return null;
+  }
+
+  connection.load = {
+    ...connection.load,
+    ...patch,
+    progressPct:
+      patch.progressPct === undefined
+        ? connection.load.progressPct
+        : Math.max(0, Math.min(100, Number(patch.progressPct) || 0)),
+    summary:
+      patch.summary === undefined
+        ? connection.load.summary
+        : patch.summary
+          ? { ...patch.summary }
+          : null,
+  };
+
+  return serializeConnection(connection);
+}
+
+export function finishConnectionLoad(connectionId, { error = null, message = '', summary = null }) {
+  const connection = state.connections.get(connectionId);
+  if (!connection) {
+    return null;
+  }
+
+  connection.load = {
+    ...connection.load,
+    status: error ? 'failed' : 'completed',
+    progressPct: error ? connection.load.progressPct : 100,
+    message,
+    error,
+    endedAt: new Date().toISOString(),
+    summary: summary ? { ...summary } : connection.load.summary,
+  };
+
+  return serializeConnection(connection);
+}
+
 export function clearRuns() {
   state.runs.clear();
+}
+
+export function removeRuns(runIds = []) {
+  for (const runId of runIds) {
+    state.runs.delete(runId);
+  }
 }
 
 export function getRun(id) {
@@ -344,6 +435,9 @@ export function getStateSnapshot() {
     connections: getOrderedConnections().map(serializeConnection),
     selectedConnectionId: state.selectedConnectionId,
     activeRunIds: getActiveRunIds(),
+    activeLoadConnectionIds: getOrderedConnections()
+      .filter((connection) => connection.load.status === 'running')
+      .map((connection) => connection.id),
     runs,
   };
 }

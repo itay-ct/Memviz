@@ -1,0 +1,254 @@
+name: search
+label: Search
+
+tests:
+  - id: exercise-1-budget-search-json
+    name: Exercise 1 - Budget Search (JSON)
+    kind: command
+    required_indexes:
+      - idx:users
+    suggested_dataset_preset_id: query-lab-json
+    defaults:
+      clients: 1
+      threads: 1
+      testTime: 20
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: memtier-
+      command: 'FT.SEARCH idx:users "@balance:[9500 +inf]" SORTBY balance DESC LIMIT 0 5000'
+
+  - id: exercise-2-id-lookup-hash-aggregate
+    name: Exercise 2 - ID Lookup (HASH Aggregate)
+    kind: command
+    required_indexes:
+      - idx:users
+    suggested_dataset_preset_id: query-lab-hash
+    defaults:
+      clients: 1
+      threads: 1
+      testTime: 20
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: memtier-
+      command: 'FT.AGGREGATE idx:users "@id==12345" LOAD 3 name email gender LIMIT 0 100 DIALECT 2'
+
+  - id: fraud-duplicate-count-aggregation
+    name: Fraud - Duplicate Count (Aggregation)
+    kind: command
+    required_indexes:
+      - idx:hashemails1
+    suggested_dataset_preset_id: duplicate-email-hash
+    defaults:
+      clients: 1
+      threads: 1
+      testTime: 20
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: memtier-
+      command: 'FT.AGGREGATE idx:hashemails1 @email:{hot\@example\.com} GROUPBY 0 REDUCE COUNT 0 AS count'
+
+dataset_presets:
+  - id: query-lab-json
+    name: Query Lab JSON
+    record_count: 100000
+    total_size: approx. 400 MB
+    dataset_yaml: |
+      name: query-lab-json
+      records: 100000
+      seed: 42
+      generator:
+        type: faker
+        entity: user
+        fields:
+          id:
+            type: int
+            unique: true
+          name:
+            type: full_name
+          email:
+            type: email
+          balance:
+            type: float
+            min: 0
+            max: 10000
+          company:
+            type: text
+          gender:
+            type: tag
+    storage_yaml: |
+      type: json
+      key_prefix: "user:"
+      write_mode: pipeline
+      pipeline_size: 1000
+      index:
+        enabled: true
+        name: idx:users
+        prefix: "user:"
+        fields:
+          - path: $.name
+            type: text
+          - path: $.email
+            type: text
+          - path: $.balance
+            type: numeric
+            sortable: true
+          - path: $.company
+            type: text
+          - path: $.gender
+            type: tag
+          - path: $.id
+            type: numeric
+
+  - id: query-lab-hash
+    name: Query Lab HASH
+    record_count: 100000
+    total_size: approx. 400 MB
+    dataset_yaml: |
+      name: query-lab-hash
+      records: 100000
+      seed: 42
+      generator:
+        type: faker
+        entity: user
+        fields:
+          id:
+            type: int
+            unique: true
+          name:
+            type: full_name
+          email:
+            type: email
+          balance:
+            type: float
+            min: 0
+            max: 10000
+          company:
+            type: text
+          gender:
+            type: tag
+    storage_yaml: |
+      type: hash
+      key_prefix: "user:"
+      write_mode: pipeline
+      pipeline_size: 1000
+      index:
+        enabled: true
+        name: idx:users
+        prefix: "user:"
+        fields:
+          - field: name
+            type: text
+          - field: email
+            type: tag
+          - field: balance
+            type: numeric
+            sortable: true
+          - field: company
+            type: text
+            sortable: true
+          - field: gender
+            type: tag
+          - field: id
+            type: numeric
+
+  - id: duplicate-email-hash
+    name: Duplicate Email HASH
+    record_count: 100000
+    total_size: approx. 400 MB
+    dataset_yaml: |
+      name: duplicate-email-hash
+      records: 100000
+      seed: 42
+      generator:
+        type: faker
+        entity: user
+        patterns:
+          duplicate_email_ratio: 0.1
+          duplicate_email_value: hot@example.com
+        fields:
+          id:
+            type: int
+            unique: true
+          name:
+            type: full_name
+          email:
+            type: email
+          age:
+            type: int
+            min: 18
+            max: 90
+          city:
+            type: city
+          country:
+            type: country
+    storage_yaml: |
+      type: hash
+      key_prefix: "user:"
+      write_mode: pipeline
+      pipeline_size: 1000
+      index:
+        enabled: true
+        name: idx:hashemails1
+        prefix: "user:"
+        fields:
+          - field: name
+            type: text
+          - field: email
+            type: tag
+          - field: age
+            type: numeric
+            sortable: true
+
+  - id: fraud-ingest
+    name: Fraud Ingest
+    record_count: 1000000
+    total_size: approx. 280 MB raw
+    dataset_yaml: |
+      name: fraud-ingest
+      records: 1000000
+      seed: 42
+      generator:
+        type: faker
+        entity: customer
+        patterns:
+          duplicate_email_ratio: 0.1
+        fields:
+          id:
+            type: int
+            unique: true
+          email:
+            type: email
+          first_name:
+            type: first_name
+          last_name:
+            type: last_name
+          country:
+            type: country
+          amount:
+            type: float
+            min: 1
+            max: 10000
+    storage_yaml: |
+      type: json
+      key_prefix: "fraud:"
+      write_mode: pipeline
+      pipeline_size: 2000
+      index:
+        enabled: true
+        name: idx:fraud
+        prefix: "fraud:"
+        fields:
+          - path: $.email
+            type: tag
+          - path: $.amount
+            type: numeric
+            sortable: true

@@ -15,6 +15,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { parseDocument } from 'yaml';
 import dashboardIconWhite from './assets/icons/redis/dashboard-white.svg';
 import analysisIconMidnight from './assets/icons/redis/analysis-midnight.svg';
 import cliIconMidnight from './assets/icons/redis/cli-midnight.svg';
@@ -25,9 +26,9 @@ import integratedModulesIconMidnight from './assets/icons/redis/integrated-modul
 import latencyIconWhite from './assets/icons/redis/latency-white.svg';
 import meteringIconMidnight from './assets/icons/redis/metering-midnight.svg';
 import pipelineIconWhite from './assets/icons/redis/pipeline-white.svg';
-import redisInsightIconDuotone from './assets/icons/redis/redis-insight-duotone.svg';
 import settingsIconMidnight from './assets/icons/redis/settings-midnight.svg';
 import settingsIconWhite from './assets/icons/redis/settings-white.svg';
+import { BLANK_DATASET_YAML, BLANK_STORAGE_YAML } from './datasetPresets.js';
 
 function CheckIcon() {
   return (
@@ -66,6 +67,25 @@ function WarningIcon() {
   );
 }
 
+function RunningIndicator() {
+  return (
+    <span aria-label="Running" className="scenario-running-indicator" role="status">
+      <span className="scenario-running-ring scenario-running-ring-outer" />
+      <span className="scenario-running-ring scenario-running-ring-inner" />
+    </span>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg aria-hidden="true" className="more-icon" viewBox="0 0 16 16">
+      <circle cx="3.25" cy="8" r="1.15" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.15" fill="currentColor" />
+      <circle cx="12.75" cy="8" r="1.15" fill="currentColor" />
+    </svg>
+  );
+}
+
 const DEFAULT_FORM = {
   hostOrUrl: '127.0.0.1',
   port: '6379',
@@ -84,8 +104,13 @@ const EMPTY_APP_STATE = {
   connections: [],
   selectedConnectionId: null,
   activeRunIds: [],
+  activeLoadConnectionIds: [],
   runs: [],
   scenarios: [],
+  datasetPresets: [],
+  presetOptions: [],
+  selectedPresetName: '',
+  selectedPresetLabel: '',
 };
 
 const EMPTY_META = {
@@ -115,6 +140,15 @@ const EMPTY_SETUP_STATE = {
 };
 
 const COMPARE_CHART_COLORS = ['#81DBFF', '#C895E3', '#DDFF21'];
+const CUSTOM_DATASET_PRESET = {
+  id: 'custom',
+  name: 'Custom...',
+  recordCount: null,
+  totalSize: 'Custom size',
+  datasetYaml: BLANK_DATASET_YAML,
+  storageYaml: BLANK_STORAGE_YAML,
+};
+const UPLOAD_PRESET_OPTION = '__upload_preset__';
 
 function upsertRun(runs, nextRun) {
   const existingRunIndex = runs.findIndex((run) => run.id === nextRun.id);
@@ -137,8 +171,13 @@ function reduceSocketMessage(state, message) {
       connections: message.state.connections ?? [],
       selectedConnectionId: message.state.selectedConnectionId ?? null,
       activeRunIds: message.state.activeRunIds ?? getActiveRunIdsFromRuns(message.state.runs ?? []),
-      runs: message.state.runs,
-      scenarios: message.scenarios,
+      activeLoadConnectionIds: message.state.activeLoadConnectionIds ?? [],
+      runs: message.state.runs ?? [],
+      scenarios: message.state.scenarios ?? [],
+      datasetPresets: message.state.datasetPresets ?? [],
+      presetOptions: message.state.presetOptions ?? [],
+      selectedPresetName: message.state.selectedPresetName ?? '',
+      selectedPresetLabel: message.state.selectedPresetLabel ?? '',
     };
   }
 
@@ -232,6 +271,65 @@ function validateConnectionForm(formState) {
   return '';
 }
 
+function isValidRedisPortValue(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function extractHostAndPortFromText(value) {
+  const trimmedValue = value.trim();
+  if (!trimmedValue || trimmedValue.includes('://')) {
+    return null;
+  }
+
+  const match = trimmedValue.match(
+    /(\[[^\]\s]+\]|[A-Za-z0-9._-]+)\s*:\s*(\d{1,5})(?=$|[/?#\s"'`,;])/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const [, hostOrUrl, port] = match;
+  if (!isValidRedisPortValue(port)) {
+    return null;
+  }
+
+  return {
+    hostOrUrl,
+    port,
+  };
+}
+
+function hasConnectionFormInput(formState) {
+  return Boolean(
+    formState.hostOrUrl.trim() ||
+      formState.port.trim() ||
+      formState.username.trim() ||
+      formState.password.trim(),
+  );
+}
+
+async function readJsonResponse(response, fallbackErrorMessage) {
+  const contentType = response.headers.get('content-type') ?? '';
+  const rawText = await response.text();
+
+  if (!rawText.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    if (contentType.includes('text/html') || rawText.trim().startsWith('<!doctype')) {
+      throw new Error(
+        `${fallbackErrorMessage} The server returned HTML instead of JSON. This usually means the backend is out of date, restarting, or the API route was not found.`,
+      );
+    }
+
+    throw new Error(fallbackErrorMessage);
+  }
+}
+
 function clampValue(value, limits) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -292,6 +390,28 @@ function formatBytesPerSecond(value) {
   return `${(value / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
+function formatDataVolume(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '—';
+  }
+
+  const absolute = Math.abs(value);
+
+  if (absolute < 1024) {
+    return `${Math.round(value)} B`;
+  }
+
+  if (absolute < 1024 * 1024) {
+    return `${(value / 1024).toFixed(value >= 1024 * 100 ? 0 : 1)} KB`;
+  }
+
+  if (absolute < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(value >= 1024 * 1024 * 100 ? 0 : 1)} MB`;
+  }
+
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 function formatKilobytesPerSecond(value) {
   return `${value.toFixed(value >= 100 ? 0 : 1)} KB/s`;
 }
@@ -332,6 +452,97 @@ function formatRunWarningTooltip(error) {
   }
 
   return `Run failed\n${error}`;
+}
+
+function parseYamlError(text, label) {
+  const document = parseDocument(text ?? '');
+  if (!document.errors.length) {
+    return '';
+  }
+
+  return `${label}: ${document.errors[0].message}`.trim();
+}
+
+function formatRecordCount(value) {
+  if (!Number.isFinite(value)) {
+    return 'Custom records';
+  }
+
+  return `${formatCompactInteger(value)} records`;
+}
+
+function getDatasetPresetOptions(datasetPresets = []) {
+  return [...datasetPresets, CUSTOM_DATASET_PRESET];
+}
+
+function findDatasetPreset(datasetPresets, presetId) {
+  const presets = getDatasetPresetOptions(datasetPresets);
+  return presets.find((preset) => preset.id === presetId) ?? presets[0] ?? CUSTOM_DATASET_PRESET;
+}
+
+function findDatasetPresetForIndexes(datasetPresets = [], indexes = []) {
+  for (const indexName of indexes) {
+    const preset = datasetPresets.find((candidate) => candidate.indexes?.includes(indexName));
+    if (preset) {
+      return preset;
+    }
+  }
+
+  return findDatasetPreset(datasetPresets, datasetPresets[0]?.id ?? CUSTOM_DATASET_PRESET.id);
+}
+
+function findDatasetPresetForScenario(datasetPresets, scenario, indexes = []) {
+  if (scenario?.suggestedDatasetPresetId) {
+    return findDatasetPreset(datasetPresets, scenario.suggestedDatasetPresetId);
+  }
+
+  return findDatasetPresetForIndexes(datasetPresets, indexes);
+}
+
+function getRequestedPresetName() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('preset')?.trim() ?? '';
+}
+
+function updatePresetQueryParam(presetName) {
+  const url = new URL(window.location.href);
+  const normalizedPresetName = String(presetName ?? '').trim();
+
+  if (normalizedPresetName) {
+    url.searchParams.set('preset', normalizedPresetName);
+  } else {
+    url.searchParams.delete('preset');
+  }
+
+  window.history.replaceState({}, '', url);
+}
+
+function extractPresetNameFromContents(contents) {
+  const document = parseDocument(contents ?? '');
+  if (document.errors.length) {
+    return {
+      error: `Preset file: ${document.errors[0].message}`.trim(),
+      name: '',
+    };
+  }
+
+  const rawPreset = document.toJSON() ?? {};
+  const name = String(rawPreset.name ?? '').trim();
+  if (!name) {
+    return {
+      error: 'Preset file: Preset name is required.',
+      name: '',
+    };
+  }
+
+  return {
+    error: '',
+    name,
+  };
+}
+
+function formatConnectionNames(connections) {
+  return connections.map((connection) => connection.name).join(', ');
 }
 
 function formatProgress(value) {
@@ -382,6 +593,20 @@ function formatDuration(startedAt, endedAt) {
   return `${minutes}m ${remainder}s`;
 }
 
+function getDurationSeconds(startedAt, endedAt) {
+  if (!startedAt) {
+    return null;
+  }
+
+  const start = new Date(startedAt).getTime();
+  const end = endedAt ? new Date(endedAt).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  return Math.max(0, (end - start) / 1000);
+}
+
 function formatControlValue(field, value) {
   if (field === 'testTime') {
     return `${value}s`;
@@ -410,12 +635,57 @@ function formatRunLimit(config) {
   return `${config.testTime}s`;
 }
 
+function formatCommandPreview(command) {
+  const compact = String(command ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (compact.length <= 72) {
+    return compact;
+  }
+
+  return `${compact.slice(0, 69)}...`;
+}
+
+function formatWorkloadMix(config) {
+  if (
+    config.setRatio === null ||
+    config.setRatio === undefined ||
+    config.getRatio === null ||
+    config.getRatio === undefined
+  ) {
+    return '—';
+  }
+
+  return `${config.setRatio}:${config.getRatio}`;
+}
+
 function formatCommandMix(config) {
-  return `${config.setRatio}:${config.getRatio} ratio`;
+  if (config.command) {
+    return formatCommandPreview(config.command);
+  }
+
+  return `${formatWorkloadMix(config)} • ${config.dataSize} B`;
+}
+
+function formatKeyPrefixSummary(config) {
+  return config.keyPrefix ?? '—';
+}
+
+function formatDataSizeSummary(config) {
+  if (config.dataSize === null || config.dataSize === undefined) {
+    return '—';
+  }
+
+  return `${config.dataSize} B`;
 }
 
 function formatRateLimitSummary(config) {
   return config.rateLimitEnabled ? `${formatRateLimit(config.rateLimit)} cap` : 'Unlimited';
+}
+
+function describeScenarioShape(config) {
+  return formatCommandMix(config);
 }
 
 function describeDraftConfig(config) {
@@ -423,9 +693,9 @@ function describeDraftConfig(config) {
     `${config.clients} clients/thread`,
     `${config.threads} threads`,
     formatRunLimit(config),
-    formatCommandMix(config),
-    `${config.dataSize}B values`,
     `pipe ${config.pipeline}`,
+    `prefix ${formatKeyPrefixSummary(config)}`,
+    describeScenarioShape(config),
     config.rateLimitEnabled ? `cap ${formatRateLimit(config.rateLimit)}` : null,
   ]
     .filter(Boolean)
@@ -565,6 +835,384 @@ function getAverageOfNumbers(values) {
   }
 
   return numericValues.reduce((total, value) => total + value, 0) / numericValues.length;
+}
+
+function inferScenarioKind(scenario, config) {
+  if (scenario?.kind) {
+    return scenario.kind;
+  }
+
+  return config?.command ? 'command' : 'workload';
+}
+
+function getCommandKeyword(command) {
+  return String(command ?? '')
+    .trim()
+    .split(/\s+/)[0]
+    ?.toUpperCase() ?? '';
+}
+
+function getGeneratedDatasetBytes(run, scenario, config) {
+  const scenarioKind = inferScenarioKind(scenario, config);
+
+  if (scenarioKind === 'command') {
+    const commandKeyword = getCommandKeyword(config?.command);
+    const readOnlyCommands = new Set([
+      'GET',
+      'MGET',
+      'HGET',
+      'HGETALL',
+      'JSON.GET',
+      'FT.SEARCH',
+      'FT.AGGREGATE',
+      'EXISTS',
+      'SCARD',
+      'ZRANGE',
+      'LRANGE',
+      'SMEMBERS',
+    ]);
+
+    if (readOnlyCommands.has(commandKeyword)) {
+      return 0;
+    }
+
+    return null;
+  }
+
+  if (
+    config?.dataSize === null ||
+    config?.dataSize === undefined ||
+    config?.setRatio === null ||
+    config?.setRatio === undefined ||
+    config?.getRatio === null ||
+    config?.getRatio === undefined
+  ) {
+    return null;
+  }
+
+  const totalRatio = config.setRatio + config.getRatio;
+  if (totalRatio <= 0 || config.setRatio <= 0) {
+    return 0;
+  }
+
+  const totalClients = (config.clients ?? 0) * (config.threads ?? 0);
+  if (totalClients <= 0) {
+    return null;
+  }
+
+  const writeRatio = config.setRatio / totalRatio;
+
+  if (config.limitMode === 'requests') {
+    const writesPerClient = (config.requestCount ?? 0) * writeRatio;
+    return config.dataSize * writesPerClient * totalClients;
+  }
+
+  const summarySeconds = run?.summary?.config?.seconds ?? null;
+  const durationSeconds =
+    summarySeconds !== null && summarySeconds !== undefined
+      ? Number(summarySeconds)
+      : getDurationSeconds(run?.startedAt, run?.endedAt);
+  const averageThroughput =
+    run?.summary?.results?.totals?.opsSec ??
+    run?.metrics?.ops_sec_avg ??
+    getSeriesAverage(getDisplaySeries(run, 'ops_sec'));
+
+  if (
+    durationSeconds === null ||
+    durationSeconds === undefined ||
+    Number.isNaN(durationSeconds) ||
+    averageThroughput === null ||
+    averageThroughput === undefined ||
+    Number.isNaN(averageThroughput)
+  ) {
+    return null;
+  }
+
+  return config.dataSize * averageThroughput * durationSeconds * writeRatio;
+}
+
+function getGeneratedDatasetDetails(run, scenario, config) {
+  const scenarioKind = inferScenarioKind(scenario, config);
+
+  if (scenarioKind === 'command') {
+    const bytes = getGeneratedDatasetBytes(run, scenario, config);
+    const commandKeyword = getCommandKeyword(config?.command);
+    const readOnlyCommands = new Set([
+      'GET',
+      'MGET',
+      'HGET',
+      'HGETALL',
+      'JSON.GET',
+      'FT.SEARCH',
+      'FT.AGGREGATE',
+      'EXISTS',
+      'SCARD',
+      'ZRANGE',
+      'LRANGE',
+      'SMEMBERS',
+    ]);
+
+    if (readOnlyCommands.has(commandKeyword)) {
+      return {
+        bytes: 0,
+        tooltip:
+          'This test only runs queries against preexisting data and does not generate any new data in Redis.',
+      };
+    }
+
+    return {
+      bytes,
+      tooltip:
+        'Generated dataset is undefined for this command workload because payload size per write cannot be inferred safely from the command alone.',
+    };
+  }
+
+  const totalClients = (config.clients ?? 0) * (config.threads ?? 0);
+  const totalRatio = (config.setRatio ?? 0) + (config.getRatio ?? 0);
+  const writeRatio = totalRatio > 0 ? (config.setRatio ?? 0) / totalRatio : 0;
+
+  if (config.setRatio <= 0 || totalRatio <= 0) {
+    return {
+      bytes: 0,
+      tooltip:
+        'Read-only workload.\nGenerated dataset = 0 because the command mix contains no write operations.',
+    };
+  }
+
+  if (config.limitMode === 'requests') {
+    const bytes = getGeneratedDatasetBytes(run, scenario, config);
+    const writesPerClient = (config.requestCount ?? 0) * writeRatio;
+    return {
+      bytes,
+      label: 'Generated data',
+      tooltip: [
+        'Request-based write estimate.',
+        `Formula: data size × writes per client × total clients`,
+        `= ${config.dataSize} B × ${writesPerClient.toFixed(0)} × ${totalClients}`,
+        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+      ].join('\n'),
+    };
+  }
+
+  const summarySeconds = run?.summary?.config?.seconds ?? null;
+  const durationSeconds =
+    summarySeconds !== null && summarySeconds !== undefined
+      ? Number(summarySeconds)
+      : getDurationSeconds(run?.startedAt, run?.endedAt);
+  const averageThroughput =
+    run?.summary?.results?.totals?.opsSec ??
+    run?.metrics?.ops_sec_avg ??
+    getSeriesAverage(getDisplaySeries(run, 'ops_sec'));
+
+  const hasMeasuredDuration =
+    durationSeconds !== null && durationSeconds !== undefined && !Number.isNaN(durationSeconds);
+  const hasMeasuredThroughput =
+    averageThroughput !== null &&
+    averageThroughput !== undefined &&
+    !Number.isNaN(averageThroughput);
+
+  if (hasMeasuredDuration && hasMeasuredThroughput) {
+    const bytes = config.dataSize * averageThroughput * durationSeconds * writeRatio;
+
+    return {
+      bytes,
+      label: 'Generated data',
+      tooltip: [
+        'Time-based generated data.',
+        'Formula: data size × average ops/sec × duration × write ratio',
+        `= ${config.dataSize} B × ${averageThroughput.toFixed(0)} × ${durationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
+        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+      ].join('\n'),
+    };
+  }
+
+  const configuredDurationSeconds = Number(config.testTime ?? scenario?.defaults?.testTime ?? NaN);
+  const hasConfiguredDuration =
+    configuredDurationSeconds !== null &&
+    configuredDurationSeconds !== undefined &&
+    !Number.isNaN(configuredDurationSeconds);
+  const configuredRateLimit = Number(config.rateLimit ?? NaN);
+  const estimatedScenarioThroughput = Number(scenario?.estimatedOpsPerSec ?? NaN);
+  let estimatedThroughput = null;
+
+  if (config.rateLimitEnabled && !Number.isNaN(configuredRateLimit)) {
+    estimatedThroughput = !Number.isNaN(estimatedScenarioThroughput)
+      ? Math.min(configuredRateLimit, estimatedScenarioThroughput)
+      : configuredRateLimit;
+  } else if (!Number.isNaN(estimatedScenarioThroughput)) {
+    estimatedThroughput = estimatedScenarioThroughput;
+  }
+
+  const hasEstimatedThroughput =
+    estimatedThroughput !== null &&
+    estimatedThroughput !== undefined &&
+    !Number.isNaN(estimatedThroughput);
+
+  if (hasConfiguredDuration && hasEstimatedThroughput) {
+    const bytes = config.dataSize * estimatedThroughput * configuredDurationSeconds * writeRatio;
+    const throughputSource = config.rateLimitEnabled
+      ? !Number.isNaN(estimatedScenarioThroughput)
+        ? `min(rate limit ${configuredRateLimit.toFixed(0)} ops/sec, preset estimate ${estimatedScenarioThroughput.toFixed(0)} ops/sec)`
+        : `rate limit ${configuredRateLimit.toFixed(0)} ops/sec`
+      : `preset estimate ${estimatedThroughput.toFixed(0)} ops/sec`;
+
+    return {
+      bytes,
+      label: 'Estimated data',
+      tooltip: [
+        'Pre-run estimate for this time-based write workload.',
+        'Formula: data size × estimated ops/sec × duration × write ratio',
+        `= ${config.dataSize} B × ${estimatedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
+        `Throughput source: ${throughputSource}`,
+        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+      ].join('\n'),
+    };
+  }
+
+  return {
+    bytes: null,
+    label: 'Generated data',
+    tooltip:
+      'Generated data cannot be estimated yet because this time-based write workload has no configured throughput estimate and no live throughput samples yet.',
+  };
+}
+
+function getEstimatedGeneratedDatasetDetails(scenario, config) {
+  const scenarioKind = inferScenarioKind(scenario, config);
+
+  if (scenarioKind === 'command') {
+    const commandKeyword = getCommandKeyword(config?.command);
+    const readOnlyCommands = new Set([
+      'GET',
+      'MGET',
+      'HGET',
+      'HGETALL',
+      'JSON.GET',
+      'FT.SEARCH',
+      'FT.AGGREGATE',
+      'EXISTS',
+      'SCARD',
+      'ZRANGE',
+      'LRANGE',
+      'SMEMBERS',
+    ]);
+
+    if (readOnlyCommands.has(commandKeyword)) {
+      return {
+        bytes: 0,
+        label: 'Est Generated data',
+        tooltip:
+          'This test only runs queries against preexisting data and does not generate any new data in Redis.',
+      };
+    }
+
+    return {
+      bytes: null,
+      label: 'Est Generated data',
+      tooltip:
+        'Estimated generated data is undefined for this command workload because payload size per write cannot be inferred safely from the command alone.',
+    };
+  }
+
+  if (
+    config?.dataSize === null ||
+    config?.dataSize === undefined ||
+    config?.setRatio === null ||
+    config?.setRatio === undefined ||
+    config?.getRatio === null ||
+    config?.getRatio === undefined
+  ) {
+    return {
+      bytes: null,
+      label: 'Est Generated data',
+      tooltip: 'Estimated generated data is unavailable because one or more workload parameters are missing.',
+    };
+  }
+
+  const totalRatio = config.setRatio + config.getRatio;
+  if (totalRatio <= 0 || config.setRatio <= 0) {
+    return {
+      bytes: 0,
+      label: 'Est Generated data',
+      tooltip:
+        'This workload has no write operations in its command mix, so it is estimated to generate no new Redis data.',
+    };
+  }
+
+  const totalClients = (config.clients ?? 0) * (config.threads ?? 0);
+  if (totalClients <= 0) {
+    return {
+      bytes: null,
+      label: 'Est Generated data',
+      tooltip: 'Estimated generated data is unavailable because total client count is not valid.',
+    };
+  }
+
+  const writeRatio = config.setRatio / totalRatio;
+
+  if (config.limitMode === 'requests') {
+    const writesPerClient = (config.requestCount ?? 0) * writeRatio;
+    return {
+      bytes: config.dataSize * writesPerClient * totalClients,
+      label: 'Est Generated data',
+      tooltip: [
+        'Final generated data estimate for this request-based write workload.',
+        `Formula: data size × writes per client × total clients`,
+        `= ${config.dataSize} B × ${writesPerClient.toFixed(0)} × ${totalClients}`,
+        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+      ].join('\n'),
+    };
+  }
+
+  const configuredDurationSeconds = Number(config.testTime ?? scenario?.defaults?.testTime ?? NaN);
+  const hasConfiguredDuration =
+    configuredDurationSeconds !== null &&
+    configuredDurationSeconds !== undefined &&
+    !Number.isNaN(configuredDurationSeconds);
+  const configuredRateLimit = Number(config.rateLimit ?? NaN);
+  const estimatedScenarioThroughput = Number(scenario?.estimatedOpsPerSec ?? NaN);
+  let estimatedThroughput = null;
+
+  if (config.rateLimitEnabled && !Number.isNaN(configuredRateLimit)) {
+    estimatedThroughput = !Number.isNaN(estimatedScenarioThroughput)
+      ? Math.min(configuredRateLimit, estimatedScenarioThroughput)
+      : configuredRateLimit;
+  } else if (!Number.isNaN(estimatedScenarioThroughput)) {
+    estimatedThroughput = estimatedScenarioThroughput;
+  }
+
+  const hasEstimatedThroughput =
+    estimatedThroughput !== null &&
+    estimatedThroughput !== undefined &&
+    !Number.isNaN(estimatedThroughput);
+
+  if (hasConfiguredDuration && hasEstimatedThroughput) {
+    const bytes = config.dataSize * estimatedThroughput * configuredDurationSeconds * writeRatio;
+    const throughputSource = config.rateLimitEnabled
+      ? !Number.isNaN(estimatedScenarioThroughput)
+        ? `min(rate limit ${configuredRateLimit.toFixed(0)} ops/sec, preset estimate ${estimatedScenarioThroughput.toFixed(0)} ops/sec)`
+        : `rate limit ${configuredRateLimit.toFixed(0)} ops/sec`
+      : `preset estimate ${estimatedThroughput.toFixed(0)} ops/sec`;
+
+    return {
+      bytes,
+      label: 'Est Generated data',
+      tooltip: [
+        'Final generated data estimate for this time-based write workload.',
+        'Formula: data size × estimated ops/sec × duration × write ratio',
+        `= ${config.dataSize} B × ${estimatedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
+        `Throughput source: ${throughputSource}`,
+        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+      ].join('\n'),
+    };
+  }
+
+  return {
+    bytes: null,
+    label: 'Est Generated data',
+    tooltip:
+      'Estimated generated data is unavailable because this time-based workload has no configured throughput estimate.',
+  };
 }
 
 function getDisplaySeries(run, key) {
@@ -721,15 +1369,27 @@ function buildAdvancedMetricItems(run) {
 }
 
 function buildSetupItems(config) {
-  return [
+  const items = [
     { label: 'Clients / thread', value: `${config.clients}` },
     { label: 'Threads', value: `${config.threads}` },
     { label: 'Run limit', value: formatRunLimit(config) },
-    { label: 'Command mix', value: formatCommandMix(config) },
-    { label: 'Value size', value: `${config.dataSize} B` },
+    { label: 'Key prefix', value: config.keyPrefix },
     { label: 'Pipeline', value: `${config.pipeline}` },
     { label: 'Rate limiting', value: formatRateLimitSummary(config) },
   ];
+
+  if (config.command) {
+    items.splice(3, 0, { label: 'Command', value: formatCommandMix(config) });
+  } else {
+    items.splice(
+      3,
+      0,
+      { label: 'Command mix', value: formatWorkloadMix(config) },
+      { label: 'Value bytes', value: formatDataSizeSummary(config) },
+    );
+  }
+
+  return items;
 }
 
 function buildThroughputSummaryOptions(run) {
@@ -830,11 +1490,13 @@ function getComparisonSnapshot(run, draft) {
     clients: config.clients ?? run.summary?.config.connectionsPerThread ?? null,
     threads: config.threads ?? run.summary?.config.threads ?? null,
     runLimit: config.limitMode ? formatRunLimit(config) : null,
-    ratio:
+    command: config.command ?? null,
+    commandMix:
       config.setRatio !== undefined && config.getRatio !== undefined
-        ? `${config.setRatio}:${config.getRatio}`
+        ? formatWorkloadMix(config)
         : null,
     dataSize: config.dataSize ?? null,
+    keyPrefix: config.keyPrefix ?? null,
     pipeline: config.pipeline ?? null,
     rateLimit: config.limitMode ? formatRateLimitSummary(config) : null,
     averageThroughput: getAverageThroughputValue(run),
@@ -882,12 +1544,22 @@ function buildComparisonRows(runsWithDrafts) {
       values: snapshots.map((snapshot) => snapshot.runLimit ?? '—'),
     },
     {
-      label: 'Command mix',
-      values: snapshots.map((snapshot) => snapshot.ratio ?? '—'),
+      label: 'Command',
+      values: snapshots.map((snapshot) => snapshot.command ?? '—'),
     },
     {
-      label: 'Value size',
-      values: snapshots.map((snapshot) => formatMetric(snapshot.dataSize, (value) => `${value} B`)),
+      label: 'Command mix',
+      values: snapshots.map((snapshot) => snapshot.commandMix ?? '—'),
+    },
+    {
+      label: 'Value bytes',
+      values: snapshots.map((snapshot) =>
+        snapshot.dataSize !== null && snapshot.dataSize !== undefined ? `${snapshot.dataSize} B` : '—',
+      ),
+    },
+    {
+      label: 'Key prefix',
+      values: snapshots.map((snapshot) => snapshot.keyPrefix ?? '—'),
     },
     {
       label: 'Pipeline',
@@ -1155,6 +1827,7 @@ function IconAsset({ className = '', src }) {
 function ConnectionScreen({
   formState,
   onFormChange,
+  onHostOrUrlPaste,
   onConnect,
   connectDisabled,
   connectError,
@@ -1199,6 +1872,7 @@ function ConnectionScreen({
               autoComplete="off"
               name="hostOrUrl"
               onChange={onFormChange}
+              onPaste={onHostOrUrlPaste}
               placeholder="127.0.0.1 or redis://default:secret@host:6379/0"
               value={formState.hostOrUrl}
             />
@@ -1255,8 +1929,10 @@ function ConnectionFormPanel({
   connectDisabled,
   connectPending,
   formState,
+  formError,
   onConnect,
   onFormChange,
+  onHostOrUrlPaste,
 }) {
   return (
     <form className="topbar-connect-form" onSubmit={onConnect}>
@@ -1264,6 +1940,7 @@ function ConnectionFormPanel({
         autoComplete="off"
         name="hostOrUrl"
         onChange={onFormChange}
+        onPaste={onHostOrUrlPaste}
         placeholder="Host or URL"
         value={formState.hostOrUrl}
       />
@@ -1292,14 +1969,547 @@ function ConnectionFormPanel({
       <button className="primary-button" disabled={connectDisabled} type="submit">
         {connectPending ? 'Connecting…' : 'Connect'}
       </button>
+      {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
     </form>
+  );
+}
+
+function DatasetLoadModal({
+  allConnections,
+  datasetPresets,
+  initialAllConnections = false,
+  initialPresetId = null,
+  notice = '',
+  onClose,
+  onLoad,
+  open,
+  primaryConnection,
+}) {
+  const [flushEnabled, setFlushEnabled] = useState(true);
+  const [loadAllConnections, setLoadAllConnections] = useState(false);
+  const [selectedPresetId, setSelectedPresetId] = useState(() =>
+    findDatasetPreset(datasetPresets, initialPresetId).id,
+  );
+  const [isCustom, setIsCustom] = useState(false);
+  const [customBasePresetId, setCustomBasePresetId] = useState(null);
+  const [configPaneOpen, setConfigPaneOpen] = useState(false);
+  const [datasetYamlText, setDatasetYamlText] = useState(() =>
+    findDatasetPreset(datasetPresets, initialPresetId).datasetYaml,
+  );
+  const [storageYamlText, setStorageYamlText] = useState(() =>
+    findDatasetPreset(datasetPresets, initialPresetId).storageYaml,
+  );
+  const [datasetYamlError, setDatasetYamlError] = useState('');
+  const [storageYamlError, setStorageYamlError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const initializationKeyRef = useRef('');
+
+  useEffect(() => {
+    if (!open) {
+      initializationKeyRef.current = '';
+      return;
+    }
+
+    const initializationKey = JSON.stringify({
+      connectionId: primaryConnection?.id ?? '',
+      initialAllConnections: Boolean(initialAllConnections),
+      initialPresetId: initialPresetId ?? '',
+    });
+
+    if (initializationKeyRef.current === initializationKey) {
+      return;
+    }
+
+    initializationKeyRef.current = initializationKey;
+
+    const firstPreset = findDatasetPreset(datasetPresets, initialPresetId);
+    setFlushEnabled(true);
+    setLoadAllConnections(Boolean(initialAllConnections) && allConnections.length > 1);
+    setSelectedPresetId(firstPreset.id);
+    setIsCustom(firstPreset.id === 'custom');
+    setCustomBasePresetId(null);
+    setConfigPaneOpen(false);
+    setDatasetYamlText(firstPreset.datasetYaml);
+    setStorageYamlText(firstPreset.storageYaml);
+    setDatasetYamlError('');
+    setStorageYamlError('');
+    setSubmitError('');
+    setLoading(false);
+  }, [allConnections.length, datasetPresets, initialAllConnections, initialPresetId, open, primaryConnection?.id]);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !loading) {
+        onClose();
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [loading, onClose, open]);
+
+  if (!open || !primaryConnection) {
+    return null;
+  }
+
+  const showAllConnectionsToggle = allConnections.length > 1;
+  const targetConnections = loadAllConnections ? allConnections : [primaryConnection];
+  const presetOptions = getDatasetPresetOptions(datasetPresets);
+  const selectedPreset = findDatasetPreset(datasetPresets, selectedPresetId);
+  const actionLabel = flushEnabled ? 'Flush and Load' : 'Load';
+  const readOnly = !isCustom;
+  const canCustomize = !isCustom && selectedPresetId !== 'custom';
+  const canResetToDefaults = isCustom && Boolean(customBasePresetId);
+  const summaryRecordCount =
+    selectedPresetId === 'custom' ? formatRecordCount(null) : formatRecordCount(selectedPreset.recordCount);
+  const summaryTotalSize = selectedPresetId === 'custom' ? 'Custom size' : selectedPreset.totalSize;
+  const subtitle = formatConnectionNames(targetConnections);
+
+  function handlePresetSelect(nextPresetId) {
+    const nextPreset = findDatasetPreset(datasetPresets, nextPresetId);
+
+    if (nextPresetId === 'custom') {
+      setCustomBasePresetId((currentBasePresetId) =>
+        selectedPresetId !== 'custom' ? selectedPresetId : currentBasePresetId,
+      );
+      setSelectedPresetId('custom');
+      setIsCustom(true);
+      if (!datasetYamlText.trim() && !storageYamlText.trim()) {
+        setDatasetYamlText(BLANK_DATASET_YAML);
+        setStorageYamlText(BLANK_STORAGE_YAML);
+      }
+      return;
+    }
+
+    setSelectedPresetId(nextPresetId);
+    setIsCustom(false);
+    setCustomBasePresetId(null);
+    setDatasetYamlText(nextPreset.datasetYaml);
+    setStorageYamlText(nextPreset.storageYaml);
+    setDatasetYamlError('');
+    setStorageYamlError('');
+    setSubmitError('');
+  }
+
+  function handleCustomize() {
+    setCustomBasePresetId(selectedPresetId !== 'custom' ? selectedPresetId : customBasePresetId);
+    setSelectedPresetId('custom');
+    setIsCustom(true);
+    setConfigPaneOpen(true);
+  }
+
+  function handleResetToDefaults() {
+    if (!customBasePresetId) {
+      return;
+    }
+
+    const basePreset = findDatasetPreset(datasetPresets, customBasePresetId);
+    setSelectedPresetId(basePreset.id);
+    setIsCustom(false);
+    setCustomBasePresetId(null);
+    setDatasetYamlText(basePreset.datasetYaml);
+    setStorageYamlText(basePreset.storageYaml);
+    setDatasetYamlError('');
+    setStorageYamlError('');
+    setSubmitError('');
+  }
+
+  async function handleSubmit() {
+    const nextDatasetError = parseYamlError(datasetYamlText, 'Dataset spec');
+    const nextStorageError = parseYamlError(storageYamlText, 'Storage spec');
+
+    setDatasetYamlError(nextDatasetError);
+    setStorageYamlError(nextStorageError);
+    setSubmitError('');
+
+    if (nextDatasetError || nextStorageError) {
+      setConfigPaneOpen(true);
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await onLoad({
+        connectionIds: targetConnections.map((connection) => connection.id),
+        datasetYaml: datasetYamlText,
+        datasetPresetName: selectedPresetId === 'custom' ? 'Custom dataset' : selectedPreset.name,
+        flushEnabled,
+        storageYaml: storageYamlText,
+      });
+      onClose();
+    } catch (error) {
+      setSubmitError(error.message);
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="modal-scrim" onClick={() => !loading && onClose()}>
+      <section
+        aria-modal="true"
+        className={`dataset-modal ${configPaneOpen ? 'has-config-pane' : ''}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className="dataset-modal-header">
+          <div>
+            <p className="eyebrow">Load dataset</p>
+            <h2>{primaryConnection.name}</h2>
+            <p className="dataset-modal-subtitle">{subtitle}</p>
+          </div>
+        </header>
+
+        <div className="dataset-modal-body">
+          <div className="dataset-modal-main">
+            <label className="dataset-check">
+              <input
+                checked={flushEnabled}
+                disabled={loading}
+                onChange={(event) => setFlushEnabled(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Flush database before loading</span>
+            </label>
+
+            {showAllConnectionsToggle ? (
+              <label className="dataset-check">
+                <input
+                  checked={loadAllConnections}
+                  disabled={loading}
+                  onChange={(event) => setLoadAllConnections(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>All live connections</span>
+              </label>
+            ) : null}
+
+            <div className="dataset-field">
+              <span className="dataset-field-label">Dataset preset</span>
+              <select
+                className="dataset-preset-select"
+                disabled={loading}
+                onChange={(event) => handlePresetSelect(event.target.value)}
+                value={selectedPresetId}
+              >
+                {presetOptions.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="dataset-summary-card">
+              <div>
+                <p className="dataset-summary-line">{summaryRecordCount}</p>
+                <p className="dataset-summary-line">{summaryTotalSize}</p>
+                {notice ? <p className="dataset-summary-note">{notice}</p> : null}
+              </div>
+
+              <div className="dataset-summary-actions">
+                <button
+                  className={`ghost-button ${configPaneOpen ? 'is-active' : ''}`}
+                  disabled={loading}
+                  onClick={() => setConfigPaneOpen((current) => !current)}
+                  type="button"
+                >
+                  {configPaneOpen ? 'Hide config' : 'Show config'}
+                </button>
+              </div>
+            </div>
+
+            {submitError ? <p className="dataset-submit-error">{submitError}</p> : null}
+          </div>
+
+          {configPaneOpen ? (
+            <aside className="dataset-config-pane">
+              <div className="dataset-config-pane-head">
+                <p className="eyebrow">Config</p>
+                {canResetToDefaults ? (
+                  <button
+                    className="ghost-button"
+                    disabled={loading}
+                    onClick={handleResetToDefaults}
+                    type="button"
+                  >
+                    Reset to defaults
+                  </button>
+                ) : null}
+                {canCustomize ? (
+                  <button className="ghost-button" disabled={loading} onClick={handleCustomize} type="button">
+                    Customize
+                  </button>
+                ) : null}
+              </div>
+
+              <label className="dataset-editor-field">
+                <span>Dataset spec</span>
+                <textarea
+                  className={datasetYamlError ? 'is-invalid' : ''}
+                  onChange={(event) => {
+                    setDatasetYamlText(event.target.value);
+                    setDatasetYamlError('');
+                  }}
+                  readOnly={readOnly}
+                  spellCheck={false}
+                  value={datasetYamlText}
+                />
+                {datasetYamlError ? <strong className="dataset-editor-error">{datasetYamlError}</strong> : null}
+              </label>
+
+              <label className="dataset-editor-field">
+                <span>Storage spec</span>
+                <textarea
+                  className={storageYamlError ? 'is-invalid' : ''}
+                  onChange={(event) => {
+                    setStorageYamlText(event.target.value);
+                    setStorageYamlError('');
+                  }}
+                  readOnly={readOnly}
+                  spellCheck={false}
+                  value={storageYamlText}
+                />
+                {storageYamlError ? <strong className="dataset-editor-error">{storageYamlError}</strong> : null}
+              </label>
+            </aside>
+          ) : null}
+        </div>
+
+        <footer className="dataset-modal-footer">
+          <button className="ghost-button" disabled={loading} onClick={onClose} type="button">
+            Cancel
+          </button>
+          <button className="primary-button" disabled={loading} onClick={handleSubmit} type="button">
+            {loading ? 'Loading…' : actionLabel}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function PresetLoadResultModal({ message, onClose, open, title, tone = 'success' }) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <section
+        aria-modal="true"
+        className={`missing-index-modal preset-result-modal preset-result-modal-${tone}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="missing-index-copy">
+          <p className="eyebrow">Preset loader</p>
+          <h2>{title}</h2>
+          <p>{message}</p>
+        </div>
+
+        <footer className="missing-index-actions">
+          <button className="primary-button" onClick={onClose} type="button">
+            Close
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function MissingIndexModal({
+  connectionNames,
+  datasetName,
+  indexNames,
+  onCancel,
+  onLoadDataset,
+  open,
+}) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onCancel();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onCancel, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const indexLabel = indexNames.join(', ');
+  const connectionLabel = connectionNames.join(', ');
+
+  return (
+    <div className="modal-scrim" onClick={onCancel}>
+      <section
+        aria-modal="true"
+        className="missing-index-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="missing-index-copy">
+          <p className="eyebrow">Missing index</p>
+          <h2>Needs data loaded first.</h2>
+          <p>
+            {`This requires index ${indexLabel}, which is not found on ${connectionLabel}.\nPlease load the ${datasetName} dataset.`}
+          </p>
+        </div>
+
+        <footer className="missing-index-actions">
+          <button className="ghost-button" onClick={onCancel} type="button">
+            Cancel
+          </button>
+          <button className="primary-button" onClick={onLoadDataset} type="button">
+            Load dataset
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function CancelRunModal({ onCancel, onConfirm, open, pending }) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !pending) {
+        onCancel();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onCancel, open, pending]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim" onClick={pending ? undefined : onCancel}>
+      <section
+        aria-modal="true"
+        className="missing-index-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="missing-index-copy">
+          <p className="eyebrow">Cancel benchmark</p>
+          <h2>Are you sure you want to cancel?</h2>
+          <p>This will stop the active Memtier run and restore the test setup to its pre-run state.</p>
+        </div>
+
+        <footer className="missing-index-actions">
+          <button className="ghost-button" disabled={pending} onClick={onCancel} type="button">
+            No
+          </button>
+          <button className="primary-button" disabled={pending} onClick={onConfirm} type="button">
+            {pending ? 'Canceling…' : 'Yes'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function GeneratedDataMetric({
+  className = '',
+  run,
+  scenario,
+  config,
+  variant = 'generated',
+}) {
+  const details =
+    variant === 'estimated'
+      ? getEstimatedGeneratedDatasetDetails(scenario, config)
+      : getGeneratedDatasetDetails(run, scenario, config);
+  const isZero = details.bytes === 0;
+  const labelPrefix =
+    details.label ?? (variant === 'estimated' ? 'Est Generated data' : 'Generated data');
+  const label =
+    variant === 'estimated'
+      ? `${labelPrefix}: ${details.bytes === null ? '—' : formatDataVolume(details.bytes)}`
+      : isZero
+        ? 'No generated data'
+        : `${labelPrefix}: ${formatDataVolume(details.bytes)}`;
+  const valueLabel = details.bytes === null ? '—' : formatDataVolume(details.bytes);
+
+  if (!details.tooltip) {
+    return <span className={`generated-data-metric ${className}`.trim()}>{label}</span>;
+  }
+
+  if (variant === 'estimated') {
+    return (
+      <span className={`generated-data-metric ${className}`.trim()}>
+        <span className="generated-data-prefix">{labelPrefix}: </span>
+        <span className="generated-data-anchor" tabIndex={0}>
+          <span className="generated-data-label">{valueLabel}</span>
+          <span className="generated-data-tooltip">{details.tooltip}</span>
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <span className={`generated-data-metric ${className}`.trim()}>
+      <span className="generated-data-anchor" tabIndex={0}>
+        <span className="generated-data-label">{label}</span>
+        <span className="generated-data-tooltip">{details.tooltip}</span>
+      </span>
+    </span>
   );
 }
 
 function ConnectionCard({
   connection,
-  disabled,
+  disconnectDisabled,
   isSelected,
+  loadDisabled,
+  onLoadDataset,
   onDisconnect,
   onOpenRedisInsight,
   onRename,
@@ -1307,7 +2517,9 @@ function ConnectionCard({
 }) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(connection.name);
+  const [showMenu, setShowMenu] = useState(false);
   const titleEditorRef = useRef(null);
+  const menuRef = useRef(null);
 
   useEffect(() => {
     if (!isRenaming) {
@@ -1334,6 +2546,25 @@ function ConnectionCard({
       document.removeEventListener('pointerdown', handlePointerDown);
     };
   }, [connection.name, isRenaming]);
+
+  useEffect(() => {
+    if (!showMenu) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (menuRef.current?.contains(event.target)) {
+        return;
+      }
+
+      setShowMenu(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [showMenu]);
 
   function commitRename() {
     setIsRenaming(false);
@@ -1392,7 +2623,7 @@ function ConnectionCard({
 
         <button
           className="connection-disconnect-icon"
-          disabled={disabled}
+          disabled={disconnectDisabled}
           onClick={(event) => {
             event.stopPropagation();
             onDisconnect(connection.id);
@@ -1419,44 +2650,125 @@ function ConnectionCard({
         <span>{connection.summary}</span>
       </div>
 
-      <button
-        className="connection-insight-icon"
-        onClick={(event) => {
-          event.stopPropagation();
-          onOpenRedisInsight(connection.redisInsightUrl);
-        }}
-        title="Open in RedisInsight"
-        type="button"
+      {connection.load?.status === 'running' ? (
+        <div className="connection-load-block">
+          <div className="connection-load-head">
+            <span>Dataset load</span>
+            <strong>{formatProgress(connection.load.progressPct ?? 0)}</strong>
+          </div>
+          <div className="progress-track progress-track-light">
+            <span
+              className="progress-fill"
+              style={{ width: `${Math.max(0, Math.min(100, connection.load.progressPct ?? 0))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {connection.load?.status === 'failed' ? (
+        <p className="connection-load-error">{connection.load.error ?? 'Dataset load failed'}</p>
+      ) : null}
+
+      <div
+        className={`connection-menu-wrap ${showMenu ? 'is-open' : ''}`}
+        onClick={(event) => event.stopPropagation()}
+        ref={menuRef}
       >
-        <IconAsset className="button-icon redis-insight-icon-art" src={redisInsightIconDuotone} />
-      </button>
+        <button
+          className="connection-menu-toggle"
+          onClick={() => setShowMenu((open) => !open)}
+          title="Connection actions"
+          type="button"
+        >
+          <MoreIcon />
+        </button>
+
+        {showMenu ? (
+          <div className="connection-menu">
+            <button
+              className="connection-menu-item"
+              disabled={loadDisabled}
+              onClick={() => {
+                setShowMenu(false);
+                onLoadDataset(connection);
+              }}
+              type="button"
+            >
+              Load dataset
+            </button>
+            <button
+              className="connection-menu-item"
+              onClick={() => {
+                setShowMenu(false);
+                onOpenRedisInsight(connection.redisInsightUrl);
+              }}
+              type="button"
+            >
+              View in Redis Insight
+            </button>
+          </div>
+        ) : null}
+      </div>
     </article>
+  );
+}
+
+function PresetInfoTooltip() {
+  return (
+    <span className="topbar-preset-info-anchor" tabIndex={0}>
+      <span aria-hidden="true" className="topbar-preset-info-badge">
+        i
+      </span>
+      <span className="topbar-preset-tooltip">
+        <span>
+          A preset bundles the built-in tests and dataset presets for one workflow.
+        </span>
+        <a
+          href="https://github.com/itay-ct/Memviz?tab=readme-ov-file#presets"
+          rel="noreferrer"
+          target="_blank"
+        >
+          See the README
+        </a>
+      </span>
+    </span>
   );
 }
 
 function TopBar({
   connectDisabled,
+  connectError,
   connectPending,
   connections,
   formState,
+  hasActiveLoads,
   hasRunningRuns,
   onConnect,
+  onConnectionFormVisibilityChange,
   onDisconnect,
   onFormChange,
+  onHostOrUrlPaste,
+  onLoadDataset,
   onPrepareAddConnection,
+  onPresetChange,
   onOpenRedisInsight,
   onRenameConnection,
   onSelectConnection,
+  presetOptions,
+  presetSelectionDisabled,
   selectedConnectionId,
+  selectedPresetName,
   setup,
+  validationError,
 }) {
   const [showAddConnectionForm, setShowAddConnectionForm] = useState(false);
   const setupReady = setup.status === 'ready';
   const setupNote =
     setup.status === 'error' ? 'Setup needs attention' : !setupReady ? 'Preparing memtier' : null;
   const canAddConnection =
-    setupReady && connections.length < 3 && !hasRunningRuns;
+    setupReady && connections.length < 3 && !hasRunningRuns && !hasActiveLoads;
   const showForm = !connections.length || showAddConnectionForm;
+  const activePresetName = selectedPresetName || presetOptions[0]?.name || '';
 
   useEffect(() => {
     if (!connections.length) {
@@ -1466,6 +2778,10 @@ function TopBar({
 
     setShowAddConnectionForm(false);
   }, [connections.length]);
+
+  useEffect(() => {
+    onConnectionFormVisibilityChange?.(showForm);
+  }, [onConnectionFormVisibilityChange, showForm]);
 
   return (
     <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
@@ -1479,6 +2795,26 @@ function TopBar({
           {setupNote ? (
             <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
           ) : null}
+          {presetOptions.length ? (
+            <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
+              <span className="topbar-preset-label">Preset</span>
+              <select
+                id="topbar-preset-select"
+                className="topbar-preset-select"
+                disabled={presetSelectionDisabled}
+                onChange={(event) => onPresetChange(event.target.value)}
+                value={activePresetName}
+              >
+                {presetOptions.map((preset) => (
+                  <option key={preset.name} value={preset.name}>
+                    {preset.label}
+                  </option>
+                ))}
+                <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
+              </select>
+              <PresetInfoTooltip />
+            </label>
+          ) : null}
         </div>
       </div>
 
@@ -1486,9 +2822,11 @@ function TopBar({
         {connections.map((connection) => (
           <ConnectionCard
             connection={connection}
-            disabled={hasRunningRuns}
+            disconnectDisabled={hasRunningRuns || hasActiveLoads}
             isSelected={connection.id === selectedConnectionId}
             key={connection.id}
+            loadDisabled={hasRunningRuns || hasActiveLoads}
+            onLoadDataset={onLoadDataset}
             onDisconnect={onDisconnect}
             onOpenRedisInsight={onOpenRedisInsight}
             onRename={onRenameConnection}
@@ -1501,8 +2839,10 @@ function TopBar({
             connectDisabled={connectDisabled}
             connectPending={connectPending}
             formState={formState}
+            formError={connectError || validationError}
             onConnect={onConnect}
             onFormChange={onFormChange}
+            onHostOrUrlPaste={onHostOrUrlPaste}
           />
         ) : null}
       </div>
@@ -1697,6 +3037,42 @@ function NumericCellControl({ disabled, limits, onChange, value }) {
   );
 }
 
+function TextCellControl({
+  disabled,
+  multiline = false,
+  onChange,
+  placeholder = '',
+  value,
+}) {
+  if (multiline) {
+    return (
+      <div className="table-text-control table-text-control-multiline">
+        <textarea
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          rows={3}
+          spellCheck={false}
+          value={value}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-text-control">
+      <input
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+        type="text"
+        value={value}
+      />
+    </div>
+  );
+}
+
 function ConfigRow({ label, children }) {
   return (
     <tr className="config-table-row">
@@ -1715,6 +3091,7 @@ function ConfigTable({
   const isRequests = config.limitMode === 'requests';
   const runLimitField = isRequests ? 'requestCount' : 'testTime';
   const runLimitLimits = isRequests ? scenario.limits.requestCount : scenario.limits.testTime;
+  const isCommandScenario = scenario.kind === 'command';
 
   return (
     <div className="config-table-shell" onClick={(event) => event.stopPropagation()}>
@@ -1781,30 +3158,43 @@ function ConfigTable({
             />
           </ConfigRow>
 
-          <ConfigRow label="Set ratio">
-            <NumericCellControl
-              disabled={disabled}
-              limits={scenario.limits.setRatio}
-              onChange={(nextValue) => onConfigChange('setRatio', nextValue)}
-              value={config.setRatio}
-            />
-          </ConfigRow>
+          {!isCommandScenario ? (
+            <>
+              <ConfigRow label="Set ratio">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.setRatio}
+                  onChange={(nextValue) => onConfigChange('setRatio', nextValue)}
+                  value={config.setRatio}
+                />
+              </ConfigRow>
 
-          <ConfigRow label="Get ratio">
-            <NumericCellControl
-              disabled={disabled}
-              limits={scenario.limits.getRatio}
-              onChange={(nextValue) => onConfigChange('getRatio', nextValue)}
-              value={config.getRatio}
-            />
-          </ConfigRow>
+              <ConfigRow label="Get ratio">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.getRatio}
+                  onChange={(nextValue) => onConfigChange('getRatio', nextValue)}
+                  value={config.getRatio}
+                />
+              </ConfigRow>
 
-          <ConfigRow label="Value bytes">
-            <NumericCellControl
+              <ConfigRow label="Value bytes">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.dataSize}
+                  onChange={(nextValue) => onConfigChange('dataSize', nextValue)}
+                  value={config.dataSize}
+                />
+              </ConfigRow>
+            </>
+          ) : null}
+
+          <ConfigRow label="Key prefix">
+            <TextCellControl
               disabled={disabled}
-              limits={scenario.limits.dataSize}
-              onChange={(nextValue) => onConfigChange('dataSize', nextValue)}
-              value={config.dataSize}
+              onChange={(nextValue) => onConfigChange('keyPrefix', nextValue)}
+              placeholder="memtier-"
+              value={config.keyPrefix}
             />
           </ConfigRow>
 
@@ -1816,6 +3206,18 @@ function ConfigTable({
               value={config.pipeline}
             />
           </ConfigRow>
+
+          {isCommandScenario ? (
+            <ConfigRow label="Command">
+              <TextCellControl
+                disabled={disabled}
+                multiline
+                onChange={(nextValue) => onConfigChange('command', nextValue)}
+                placeholder={'FT.SEARCH idx:users "@balance:[9500 +inf]" SORTBY balance DESC LIMIT 0 5000'}
+                value={config.command}
+              />
+            </ConfigRow>
+          ) : null}
         </tbody>
       </table>
     </div>
@@ -1937,6 +3339,7 @@ function ScenarioCard({
   isSelected,
   isCustomizing,
   onRename,
+  onCancelRun,
   selectedConnectionName,
   onSelect,
   onToggleCompareSelection,
@@ -2061,7 +3464,17 @@ function ScenarioCard({
               </>
             )}
           </div>
-          <span>{describeDraftSummary(config, run)}</span>
+          <div className="scenario-subtitle-line">
+            <span>{describeDraftSummary(config, run)}</span>
+            <span className="scenario-subtitle-separator">•</span>
+            <GeneratedDataMetric
+              className="scenario-generated-data"
+              config={config}
+              run={run}
+              scenario={scenario}
+              variant="estimated"
+            />
+          </div>
         </div>
 
         <div className="scenario-actions" onClick={(event) => event.stopPropagation()}>
@@ -2133,6 +3546,18 @@ function ScenarioCard({
                 ) : null}
               </div>
             </>
+          ) : run?.status === 'running' ? (
+            <button
+              className="running-control"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCancelRun();
+              }}
+              type="button"
+            >
+              <RunningIndicator />
+              <span className="stop-run-button">■</span>
+            </button>
           ) : run?.status !== 'completed' ? (
             <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
               {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
@@ -2195,6 +3620,7 @@ function ScenarioList({
   onClear,
   onCompareSelected,
   onRename,
+  onCancelRun,
   onSelect,
   onToggleCompareMode,
   onToggleCompareSelection,
@@ -2248,22 +3674,21 @@ function ScenarioList({
                   type="button"
                 >
                   <strong>{scenario.name}</strong>
-                  <span>
-                    {describeDraftConfig(scenario.defaults)}
-                  </span>
                 </button>
               ))}
             </div>
           ) : null}
         </div>
-        <button
-          className={`ghost-button ${compareMode || compareView ? 'is-active' : ''}`}
-          disabled={!compareMode && !compareView && !canOpenCompareMode}
-          onClick={onToggleCompareMode}
-          type="button"
-        >
-          {compareMode || compareView ? 'Done comparing' : 'Compare'}
-        </button>
+        {canOpenCompareMode || compareMode || compareView ? (
+          <button
+            className={`ghost-button ${compareMode || compareView ? 'is-active' : ''}`}
+            disabled={!compareMode && !compareView && !canOpenCompareMode}
+            onClick={onToggleCompareMode}
+            type="button"
+          >
+            {compareMode || compareView ? 'Done comparing' : 'Compare'}
+          </button>
+        ) : null}
         <button
           className="ghost-button"
           disabled={!canClear}
@@ -2305,6 +3730,7 @@ function ScenarioList({
                 isRunning={run?.status === 'running'}
                 isSelected={!compareMode && selectedDraftId === draft.id}
                 key={draft.id}
+                onCancelRun={onCancelRun}
                 onRename={onRename}
                 onSelect={onSelect}
                 onToggleCompareSelection={onToggleCompareSelection}
@@ -2728,23 +4154,27 @@ function SummaryTable({ summary }) {
   );
 }
 
-function LogConsole({ logs }) {
+function LogConsole({ isLive = false, logs }) {
   const scrollerRef = useRef(null);
   const stickToBottomRef = useRef(true);
   const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
+  const [isPinnedToTop, setIsPinnedToTop] = useState(true);
 
   function updatePinnedState() {
     if (!scrollerRef.current) {
       return;
     }
 
+    const topOffset = scrollerRef.current.scrollTop;
     const remaining =
       scrollerRef.current.scrollHeight -
       scrollerRef.current.scrollTop -
       scrollerRef.current.clientHeight;
     const nextPinned = remaining < 32;
+    const nextAtTop = topOffset < 24;
     stickToBottomRef.current = nextPinned;
     setIsPinnedToBottom(nextPinned);
+    setIsPinnedToTop(nextAtTop);
   }
 
   useEffect(() => {
@@ -2775,6 +4205,23 @@ function LogConsole({ logs }) {
           <div className="log-empty">Run output will stream here as soon as Memtier starts.</div>
         )}
       </div>
+
+      {!isLive && !isPinnedToTop && logs.length ? (
+        <button
+          className="log-jump log-jump-top"
+          onClick={() => {
+            if (!scrollerRef.current) {
+              return;
+            }
+
+            scrollerRef.current.scrollTop = 0;
+            setIsPinnedToTop(true);
+          }}
+          type="button"
+        >
+          Jump to start
+        </button>
+      ) : null}
 
       {!isPinnedToBottom && logs.length ? (
         <button
@@ -3179,6 +4626,9 @@ function MetricsPanel({ draft, run }) {
             </div>
           </div>
           <p className="metrics-subtitle">{run.scenarioDescription}</p>
+          <p className="metrics-subtitle metrics-subtitle-secondary">
+            <GeneratedDataMetric config={run.scenarioConfig ?? {}} run={run} scenario={null} />
+          </p>
         </div>
 
         {run.status === 'completed' ? (
@@ -3327,7 +4777,7 @@ function MetricsPanel({ draft, run }) {
           <div className="panel-header">
             <p className="eyebrow">Run log</p>
           </div>
-          <LogConsole logs={run.logs} />
+          <LogConsole isLive={run.status === 'running'} logs={run.logs} />
         </section>
       ) : null}
     </section>
@@ -3347,30 +4797,43 @@ export default function App() {
   const [connectPending, setConnectPending] = useState(false);
   const [runPendingDraftId, setRunPendingDraftId] = useState(null);
   const [connectError, setConnectError] = useState('');
+  const [isConnectionFormVisible, setIsConnectionFormVisible] = useState(false);
+  const [datasetLoadContext, setDatasetLoadContext] = useState(null);
+  const [missingIndexPrompt, setMissingIndexPrompt] = useState(null);
+  const [presetLoadResult, setPresetLoadResult] = useState(null);
+  const [showCancelRunPrompt, setShowCancelRunPrompt] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
   const draftNumberRef = useRef(1);
+  const presetFileInputRef = useRef(null);
+  const initialPresetNameRef = useRef(getRequestedPresetName());
+  const previousPresetNameRef = useRef('');
+  const runLaunchSnapshotRef = useRef(null);
 
   const connections = appState.connections ?? [];
+  const hasActiveLoads = connections.some((connection) => connection.load?.status === 'running');
   const selectedConnection =
     connections.find((connection) => connection.id === appState.selectedConnectionId) ??
     connections[0] ??
     null;
-  const runningRuns = appState.runs.filter((run) => run.status === 'running');
-  const hasRunningRuns = runningRuns.length > 0;
-  const runningRun = runningRuns.at(-1) ?? null;
-  const latestRun = appState.runs.at(-1) ?? null;
   const scenarioMap = new Map(appState.scenarios.map((scenario) => [scenario.id, scenario]));
-  const runById = new Map(appState.runs.map((run) => [run.id, run]));
+  const visibleRuns = appState.runs.filter((run) => scenarioMap.has(run.scenarioId));
+  const activeRuns = appState.runs.filter((run) => run.status === 'running');
+  const hasRunningRuns = activeRuns.length > 0;
+  const runningRun = visibleRuns.filter((run) => run.status === 'running').at(-1) ?? null;
+  const latestRun = visibleRuns.at(-1) ?? null;
+  const runById = new Map(visibleRuns.map((run) => [run.id, run]));
   const draftByRunId = new Map(
     drafts.filter((draft) => draft.runId).map((draft) => [draft.runId, draft]),
   );
   const hasReadyDraft = drafts.some((draft) => !draft.runId);
   const canClear =
     !hasRunningRuns &&
+    !hasActiveLoads &&
     runPendingDraftId === null &&
     (drafts.length > 0 || compareMode || compareView);
-  const completedRuns = appState.runs.filter((run) => run.status === 'completed');
+  const completedRuns = visibleRuns.filter((run) => run.status === 'completed');
   const canOpenCompareMode =
-    completedRuns.length >= 2 && !hasRunningRuns && runPendingDraftId === null;
+    completedRuns.length >= 2 && !hasRunningRuns && !hasActiveLoads && runPendingDraftId === null;
   const comparedRuns = selectedComparisonRunIds
     .map((runId) => {
       const run = runById.get(runId);
@@ -3392,6 +4855,9 @@ export default function App() {
           scenario: scenarioMap.get(selectedDraft.scenarioId) ?? null,
         }
       : null;
+  const datasetLoadPrimaryConnection = datasetLoadContext
+    ? connections.find((connection) => connection.id === datasetLoadContext.primaryConnectionId) ?? null
+    : null;
 
   function createDraft(scenario, options = {}) {
     const number = options.number ?? draftNumberRef.current++;
@@ -3408,7 +4874,14 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!appState.scenarios.length) {
+    setDrafts((currentDrafts) => {
+      const nextDrafts = currentDrafts.filter((draft) => scenarioMap.has(draft.scenarioId));
+      return nextDrafts.length === currentDrafts.length ? currentDrafts : nextDrafts;
+    });
+  }, [appState.scenarios]);
+
+  useEffect(() => {
+    if (!visibleRuns.length) {
       return;
     }
 
@@ -3416,12 +4889,16 @@ export default function App() {
       let nextDrafts = currentDrafts;
       let changed = false;
 
-      for (const run of appState.runs) {
+      for (const run of visibleRuns) {
         if (nextDrafts.some((draft) => draft.runId === run.id)) {
           continue;
         }
 
-        const scenario = scenarioMap.get(run.scenarioId) ?? appState.scenarios[0];
+        const scenario = scenarioMap.get(run.scenarioId);
+        if (!scenario) {
+          continue;
+        }
+
         nextDrafts = [
           ...nextDrafts,
           createDraft(scenario, {
@@ -3439,10 +4916,40 @@ export default function App() {
   }, [appState.runs, appState.scenarios]);
 
   useEffect(() => {
+    if (!appState.selectedPresetName) {
+      return;
+    }
+
+    updatePresetQueryParam(appState.selectedPresetName);
+  }, [appState.selectedPresetName]);
+
+  useEffect(() => {
+    if (!appState.selectedPresetName) {
+      return;
+    }
+
+    if (previousPresetNameRef.current && previousPresetNameRef.current !== appState.selectedPresetName) {
+      setCompareMode(false);
+      setCompareView(false);
+      setSelectedComparisonRunIds([]);
+      setDatasetLoadContext(null);
+      setMissingIndexPrompt(null);
+    }
+
+    previousPresetNameRef.current = appState.selectedPresetName;
+  }, [appState.selectedPresetName]);
+
+  useEffect(() => {
     setSelectedComparisonRunIds((currentIds) =>
       currentIds.filter((runId) => runById.get(runId)?.status === 'completed'),
     );
   }, [appState.runs]);
+
+  useEffect(() => {
+    if (showCancelRunPrompt && !hasRunningRuns && !cancelPending) {
+      setShowCancelRunPrompt(false);
+    }
+  }, [cancelPending, hasRunningRuns, showCancelRunPrompt]);
 
   useEffect(() => {
     if (!drafts.length) {
@@ -3481,14 +4988,30 @@ export default function App() {
   });
 
   useEffect(() => {
-    fetch('/api/state')
-      .then((response) => response.json())
-      .then((state) => {
-        startTransition(() => {
-          setAppState(state);
-        });
-      })
-      .catch(() => {});
+    const requestedPresetName = initialPresetNameRef.current;
+    const stateUrl = requestedPresetName
+      ? `/api/state?preset=${encodeURIComponent(requestedPresetName)}`
+      : '/api/state';
+
+    async function loadInitialState(url) {
+      const response = await fetch(url);
+      const payload = await readJsonResponse(response, 'Could not load app state.');
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not load app state.');
+      }
+
+      startTransition(() => {
+        setAppState(payload);
+      });
+    }
+
+    loadInitialState(stateUrl).catch(() => {
+      if (stateUrl === '/api/state') {
+        return;
+      }
+
+      loadInitialState('/api/state').catch(() => {});
+    });
   }, []);
 
   useEffect(() => {
@@ -3545,7 +5068,14 @@ export default function App() {
 
     const intervalId = window.setInterval(() => {
       fetch('/api/state')
-        .then((response) => response.json())
+        .then(async (response) => {
+          const payload = await readJsonResponse(response, 'Could not refresh app state.');
+          if (!response.ok) {
+            throw new Error(payload.error ?? 'Could not refresh app state.');
+          }
+
+          return payload;
+        })
         .then((state) => {
           startTransition(() => {
             setAppState(state);
@@ -3602,6 +5132,32 @@ export default function App() {
     setConnectError('');
   }
 
+  function handleHostOrUrlPaste(event) {
+    const pastedText = event.clipboardData?.getData('text') ?? '';
+    if (!pastedText) {
+      return;
+    }
+
+    const parsedClipboardValue = extractHostAndPortFromText(pastedText);
+    const targetValue = event.target.value ?? '';
+    const selectionStart = event.target.selectionStart ?? targetValue.length;
+    const selectionEnd = event.target.selectionEnd ?? targetValue.length;
+    const combinedValue = `${targetValue.slice(0, selectionStart)}${pastedText}${targetValue.slice(selectionEnd)}`;
+    const parsedValue = parsedClipboardValue ?? extractHostAndPortFromText(combinedValue);
+
+    if (!parsedValue) {
+      return;
+    }
+
+    event.preventDefault();
+    setFormState((currentForm) => ({
+      ...currentForm,
+      hostOrUrl: parsedValue.hostOrUrl,
+      port: parsedValue.port,
+    }));
+    setConnectError('');
+  }
+
   function handleScenarioConfigChange(scenarioId, field, nextValue) {
     const draft = drafts.find((entry) => entry.id === scenarioId);
     const scenario = draft ? scenarioMap.get(draft.scenarioId) : null;
@@ -3610,6 +5166,23 @@ export default function App() {
     }
 
     if (field === 'limitMode' || field === 'rateLimitEnabled') {
+      setDrafts((currentDrafts) =>
+        currentDrafts.map((entry) =>
+          entry.id === scenarioId
+            ? {
+                ...entry,
+                config: {
+                  ...entry.config,
+                  [field]: nextValue,
+                },
+              }
+            : entry,
+        ),
+      );
+      return;
+    }
+
+    if (field === 'command' || field === 'keyPrefix') {
       setDrafts((currentDrafts) =>
         currentDrafts.map((entry) =>
           entry.id === scenarioId
@@ -3777,6 +5350,160 @@ export default function App() {
     setConnectError('');
   }
 
+  async function handlePresetChange(nextPresetName) {
+    if (!nextPresetName) {
+      return;
+    }
+
+    if (nextPresetName === UPLOAD_PRESET_OPTION) {
+      if (presetFileInputRef.current) {
+        presetFileInputRef.current.value = '';
+        presetFileInputRef.current.click();
+      }
+      return;
+    }
+
+    setConnectError('');
+    setPresetLoadResult(null);
+
+    try {
+      const response = await fetch('/api/presets/select', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ presetName: nextPresetName }),
+      });
+      const payload = await readJsonResponse(response, 'Could not switch presets.');
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not switch presets.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+      updatePresetQueryParam(payload.state?.selectedPresetName ?? nextPresetName);
+    } catch (error) {
+      setPresetLoadResult({
+        message: error.message,
+        title: 'Could not switch preset',
+        tone: 'error',
+      });
+    }
+  }
+
+  async function handlePresetFileSelection(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setConnectError('');
+    setPresetLoadResult(null);
+
+    try {
+      const contents = await file.text();
+      const validation = extractPresetNameFromContents(contents);
+
+      if (validation.error) {
+        throw new Error(validation.error);
+      }
+
+      if (appState.presetOptions.some((preset) => preset.name === validation.name)) {
+        throw new Error(
+          `Preset "${validation.name}" already exists. Rename the preset in the YAML file and try again.`,
+        );
+      }
+
+      const response = await fetch('/api/presets/import', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents,
+          fileName: file.name,
+        }),
+      });
+      const payload = await readJsonResponse(response, 'Could not load the preset file.');
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not load the preset file.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+      updatePresetQueryParam(payload.state?.selectedPresetName ?? validation.name);
+      setPresetLoadResult({
+        message:
+          payload.message ??
+          `Loaded preset "${payload.state?.selectedPresetName ?? validation.name}".`,
+        title: 'Preset loaded',
+        tone: 'success',
+      });
+    } catch (error) {
+      setPresetLoadResult({
+        message: error.message,
+        title: 'Could not load preset',
+        tone: 'error',
+      });
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  function handleOpenDatasetLoad(connection, options = {}) {
+    setConnectError('');
+    setMissingIndexPrompt(null);
+    setDatasetLoadContext({
+      primaryConnectionId: connection.id,
+      initialAllConnections: Boolean(options.initialAllConnections),
+      initialPresetId:
+        options.initialPresetId ??
+        appState.datasetPresets[0]?.id ??
+        CUSTOM_DATASET_PRESET.id,
+      notice: options.notice ?? '',
+    });
+  }
+
+  async function handleLoadDataset({
+    connectionIds,
+    datasetYaml,
+    datasetPresetName,
+    flushEnabled,
+    storageYaml,
+  }) {
+    setConnectError('');
+
+    const response = await fetch('/api/load-dataset', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        connectionIds,
+        datasetYaml,
+        datasetPresetName,
+        flushEnabled,
+        storageYaml,
+      }),
+    });
+    const payload = await readJsonResponse(
+      response,
+      'Could not load the dataset.',
+    );
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? 'Could not load the dataset.');
+    }
+
+    startTransition(() => {
+      setAppState(payload.state ?? EMPTY_APP_STATE);
+    });
+  }
+
   async function handleRun(draftId, scope = 'selected') {
     setConnectError('');
     setRunPendingDraftId(draftId);
@@ -3786,6 +5513,12 @@ export default function App() {
       if (!draft) {
         throw new Error('Could not find the selected test.');
       }
+      const scenario = scenarioMap.get(draft.scenarioId) ?? null;
+
+      const launchSnapshot = {
+        drafts,
+        selectedDraftId,
+      };
 
       const response = await fetch('/api/run', {
         method: 'POST',
@@ -3803,8 +5536,43 @@ export default function App() {
 
       const payload = await response.json();
       if (!response.ok) {
+        if (payload.code === 'missing_required_index') {
+          const suggestedPreset = findDatasetPresetForScenario(
+            appState.datasetPresets,
+            scenario,
+            payload.missingIndexes,
+          );
+          const missingConnectionId =
+            scope === 'all'
+              ? selectedConnection?.id ?? payload.missingConnections?.[0]?.id
+              : payload.missingConnections?.[0]?.id ?? selectedConnection?.id;
+          const targetConnection =
+            connections.find((connection) => connection.id === missingConnectionId) ??
+            selectedConnection ??
+            connections[0];
+
+          if (targetConnection) {
+            setMissingIndexPrompt({
+              connectionNames: (payload.missingConnections ?? []).map((entry) => entry.name),
+              datasetName: suggestedPreset.name,
+              indexNames: payload.missingIndexes ?? [],
+              loadOptions: {
+                initialAllConnections: scope === 'all',
+                initialPresetId: suggestedPreset.id,
+                notice:
+                  payload.error ??
+                  `This benchmark requires ${payload.missingIndexes?.join(', ')}. Load ${suggestedPreset.name} before tuning it.`,
+                primaryConnectionId: targetConnection.id,
+              },
+            });
+            return;
+          }
+        }
+
         throw new Error(payload.error ?? 'Run failed to start.');
       }
+
+      runLaunchSnapshotRef.current = launchSnapshot;
 
       if (payload.runs?.length) {
         startTransition(() => {
@@ -3869,12 +5637,82 @@ export default function App() {
     }
   }
 
-  const validationError = validateConnectionForm(formState);
+  async function handleCancelRun() {
+    if (cancelPending) {
+      return;
+    }
+
+    if (!hasRunningRuns) {
+      setShowCancelRunPrompt(false);
+      setConnectError('');
+      return;
+    }
+
+    setConnectError('');
+    setCancelPending(true);
+
+    try {
+      const response = await fetch('/api/run/cancel', {
+        method: 'POST',
+      });
+      const payload = await readJsonResponse(response, 'Cancel failed.');
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Cancel failed.');
+      }
+
+      const snapshot = runLaunchSnapshotRef.current;
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+
+      if (!(payload.canceledRunIds?.length > 0)) {
+        runLaunchSnapshotRef.current = null;
+        setShowCancelRunPrompt(false);
+        return;
+      }
+
+      if (snapshot) {
+        setDrafts(snapshot.drafts.map((draft) => ({ ...draft, isCustomizing: false })));
+        setSelectedDraftId(snapshot.selectedDraftId);
+      } else {
+        const canceledRunIds = payload.canceledRunIds ?? [];
+        setDrafts((currentDrafts) =>
+          currentDrafts.map((draft) =>
+            canceledRunIds.includes(draft.runId)
+              ? {
+                  ...draft,
+                  isCustomizing: false,
+                  runId: null,
+                }
+              : draft,
+          ),
+        );
+      }
+
+      runLaunchSnapshotRef.current = null;
+      setShowCancelRunPrompt(false);
+    } catch (error) {
+      if (error.message === 'There is no active benchmark to cancel.') {
+        setShowCancelRunPrompt(false);
+        return;
+      }
+
+      setConnectError(error.message);
+    } finally {
+      setCancelPending(false);
+    }
+  }
+
+  const validationError = hasConnectionFormInput(formState) ? validateConnectionForm(formState) : '';
+  const rawValidationError = validateConnectionForm(formState);
   const connectDisabled =
-    Boolean(validationError) ||
+    Boolean(rawValidationError) ||
     connectPending ||
     setupState.status !== 'ready' ||
     hasRunningRuns ||
+    hasActiveLoads ||
     connections.length >= 3;
 
   async function handleRetrySetup() {
@@ -4020,22 +5858,32 @@ export default function App() {
     <div className="app-shell">
       <TopBar
         connectDisabled={connectDisabled}
+        connectError={connectError}
         connectPending={connectPending}
         connections={connections}
         formState={formState}
+        hasActiveLoads={hasActiveLoads}
         hasRunningRuns={hasRunningRuns}
         onConnect={handleConnect}
+        onConnectionFormVisibilityChange={setIsConnectionFormVisible}
         onDisconnect={handleDisconnect}
         onFormChange={handleFormChange}
+        onHostOrUrlPaste={handleHostOrUrlPaste}
+        onLoadDataset={handleOpenDatasetLoad}
         onPrepareAddConnection={handlePrepareAddConnection}
+        onPresetChange={handlePresetChange}
         onOpenRedisInsight={handleOpenRedisInsight}
         onRenameConnection={handleRenameConnection}
         onSelectConnection={handleSelectConnection}
+        presetOptions={appState.presetOptions}
+        presetSelectionDisabled={hasRunningRuns || hasActiveLoads}
         selectedConnectionId={selectedConnection?.id ?? null}
+        selectedPresetName={appState.selectedPresetName}
         setup={setupState}
+        validationError={validationError}
       />
-      {connectError || validationError ? (
-        <div className="error-banner">{connectError || validationError}</div>
+      {connectError && !isConnectionFormVisible ? (
+        <div className="error-banner">{connectError}</div>
       ) : null}
 
       {connections.length ? (
@@ -4048,7 +5896,8 @@ export default function App() {
             compareView={compareView}
             connections={connections}
             drafts={drafts}
-            hasRunningRuns={hasRunningRuns}
+            hasRunningRuns={hasRunningRuns || hasActiveLoads}
+            onCancelRun={() => setShowCancelRunPrompt(true)}
             onClear={handleClear}
             onCompareSelected={handleCompareSelected}
             onRename={handleRenameDraft}
@@ -4100,6 +5949,76 @@ export default function App() {
         </span>
         <span>running on port {setupState.appPort ?? appMeta.appPort}</span>
       </footer>
+
+      <DatasetLoadModal
+        allConnections={connections}
+        datasetPresets={appState.datasetPresets}
+        initialAllConnections={Boolean(datasetLoadContext?.initialAllConnections)}
+        initialPresetId={
+          datasetLoadContext?.initialPresetId ??
+          appState.datasetPresets[0]?.id ??
+          CUSTOM_DATASET_PRESET.id
+        }
+        notice={datasetLoadContext?.notice ?? ''}
+        onClose={() => setDatasetLoadContext(null)}
+        onLoad={handleLoadDataset}
+        open={Boolean(datasetLoadContext)}
+        primaryConnection={datasetLoadPrimaryConnection}
+      />
+
+      <MissingIndexModal
+        connectionNames={missingIndexPrompt?.connectionNames ?? []}
+        datasetName={missingIndexPrompt?.datasetName ?? ''}
+        indexNames={missingIndexPrompt?.indexNames ?? []}
+        onCancel={() => setMissingIndexPrompt(null)}
+        onLoadDataset={() => {
+          const prompt = missingIndexPrompt;
+          if (!prompt) {
+            return;
+          }
+
+          const primaryConnection =
+            connections.find(
+              (connection) => connection.id === prompt.loadOptions.primaryConnectionId,
+            ) ?? connections[0];
+
+          if (!primaryConnection) {
+            setMissingIndexPrompt(null);
+            return;
+          }
+
+          handleOpenDatasetLoad(primaryConnection, prompt.loadOptions);
+        }}
+        open={Boolean(missingIndexPrompt)}
+      />
+
+      <CancelRunModal
+        onCancel={() => {
+          if (cancelPending) {
+            return;
+          }
+          setShowCancelRunPrompt(false);
+        }}
+        onConfirm={handleCancelRun}
+        pending={cancelPending}
+        open={showCancelRunPrompt}
+      />
+
+      <PresetLoadResultModal
+        message={presetLoadResult?.message ?? ''}
+        onClose={() => setPresetLoadResult(null)}
+        open={Boolean(presetLoadResult)}
+        title={presetLoadResult?.title ?? ''}
+        tone={presetLoadResult?.tone ?? 'success'}
+      />
+
+      <input
+        accept=".yaml,.yml,text/yaml,application/yaml"
+        hidden
+        onChange={handlePresetFileSelection}
+        ref={presetFileInputRef}
+        type="file"
+      />
     </div>
   );
 }

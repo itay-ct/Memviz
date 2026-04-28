@@ -1,0 +1,182 @@
+name: general
+label: General
+
+tests:
+  - id: read-heavy-cache-sweep
+    name: Read Heavy Cache Sweep
+    kind: workload
+    estimated_ops_per_sec: 20000
+    defaults:
+      clients: 70
+      threads: 4
+      testTime: 15
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: memtier-
+      setRatio: 1
+      getRatio: 20
+      dataSize: 32
+
+  - id: write-heavy-session-churn
+    name: Write Heavy Session Churn
+    kind: workload
+    estimated_ops_per_sec: 16000
+    defaults:
+      clients: 40
+      threads: 4
+      testTime: 15
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: memtier-
+      setRatio: 4
+      getRatio: 1
+      dataSize: 64
+
+  - id: large-payload-throughput
+    name: Large Payload Throughput
+    kind: workload
+    estimated_ops_per_sec: 6000
+    defaults:
+      clients: 30
+      threads: 4
+      testTime: 15
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: memtier-
+      setRatio: 1
+      getRatio: 10
+      dataSize: 512
+
+  - id: high-pipeline-batch-blast
+    name: High Pipeline Batch Blast
+    kind: workload
+    estimated_ops_per_sec: 80000
+    defaults:
+      clients: 24
+      threads: 4
+      testTime: 15
+      limitMode: time
+      requestCount: 150000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 150
+      keyPrefix: memtier-
+      setRatio: 1
+      getRatio: 10
+      dataSize: 32
+
+dataset_presets:
+  - id: retail-catalog-json
+    name: Retail Catalog JSON
+    record_count: 50000
+    total_size: approx. 95 MB raw
+    dataset_yaml: |
+      name: retail-catalog-json
+      records: 50000
+      seed: 42
+      generator:
+        type: faker
+        entity: product
+        fields:
+          productId:
+            type: int
+            unique: true
+          price:
+            type: float
+            min: 49
+            max: 1999
+          productDisplayName:
+            type: text
+          variantName:
+            type: text
+          brandName:
+            type: tag
+          ageGroup:
+            type: tag
+          gender:
+            type: tag
+          displayCategories:
+            type: tag
+          productColors:
+            type: tag
+          season:
+            type: tag
+          usage:
+            type: tag
+          masterCategoryType:
+            type: tag
+          subCategoryType:
+            type: tag
+          productDescription:
+            type: text
+          imageLink:
+            type: text
+    storage_yaml: |
+      type: json
+      key_prefix: "product:"
+      write_mode: pipeline
+      pipeline_size: 1000
+      index:
+        enabled: false
+
+  - id: retail-catalog-hash
+    name: Retail Catalog HASH
+    record_count: 50000
+    total_size: approx. 80 MB raw
+    dataset_yaml: |
+      name: retail-catalog-hash
+      records: 50000
+      seed: 42
+      generator:
+        type: faker
+        entity: product
+        fields:
+          productId:
+            type: int
+            unique: true
+          price:
+            type: float
+            min: 49
+            max: 1999
+          productDisplayName:
+            type: text
+          variantName:
+            type: text
+          brandName:
+            type: tag
+          ageGroup:
+            type: tag
+          gender:
+            type: tag
+          displayCategories:
+            type: tag
+          productColors:
+            type: tag
+          season:
+            type: tag
+          usage:
+            type: tag
+          masterCategoryType:
+            type: tag
+          subCategoryType:
+            type: tag
+          productDescription:
+            type: text
+          imageLink:
+            type: text
+    storage_yaml: |
+      type: hash
+      key_prefix: "product:"
+      write_mode: pipeline
+      pipeline_size: 1000
+      index:
+        enabled: false
