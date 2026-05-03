@@ -273,9 +273,13 @@ async function ensureSearchIndex(client, storageSpec) {
     return;
   }
 
+  const indexName = storageSpec.index.name ?? `idx:${sanitizeToken(storageSpec.key_prefix) || 'records'}`;
   const supportsSearch = await commandSupported(client, 'FT.CREATE');
   if (!supportsSearch) {
-    return;
+    throw createLoaderError(
+      `This dataset preset requires RediSearch/Query Engine support to create ${indexName}, but the connected database does not expose FT.CREATE. Redis Flex databases without Search support cannot run search presets.`,
+      'capability',
+    );
   }
 
   const storageType = String(storageSpec?.type ?? 'json').toLowerCase();
@@ -284,7 +288,6 @@ async function ensureSearchIndex(client, storageSpec) {
     return;
   }
 
-  const indexName = storageSpec.index.name ?? `idx:${sanitizeToken(storageSpec.key_prefix) || 'records'}`;
   const prefix = storageSpec.index.prefix ?? storageSpec.key_prefix ?? 'record:';
   const args = [
     'FT.CREATE',
@@ -306,7 +309,10 @@ async function ensureSearchIndex(client, storageSpec) {
     }
 
     if (/unknown command/i.test(error.message)) {
-      return;
+      throw createLoaderError(
+        `This dataset preset requires RediSearch/Query Engine support to create ${indexName}, but FT.CREATE is unavailable on the connected database.`,
+        'capability',
+      );
     }
 
     throw error;

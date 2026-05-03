@@ -66,7 +66,7 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(projectRoot, 'dist');
 const REDIS_CONNECT_TIMEOUT_MS = 3000;
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.1.0';
 const APP_PORT = Number(process.env.PORT ?? 3000);
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
 const MAX_CONNECTIONS = 3;
@@ -249,7 +249,36 @@ function withStatus(res, error) {
     return res.status(400);
   }
 
+  if (error.kind === 'capability') {
+    return res.status(409);
+  }
+
   return res.status(502);
+}
+
+async function commandSupportedOnTarget(target, commandName) {
+  const client = createClient({
+    url: buildRedisUrl(target),
+    socket: {
+      connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
+    },
+  });
+
+  client.on('error', () => {});
+
+  try {
+    await client.connect();
+    const response = await client.sendCommand(['COMMAND', 'INFO', commandName]);
+    return Array.isArray(response) ? Boolean(response[0]) : Boolean(response);
+  } catch {
+    return false;
+  } finally {
+    if (client.isOpen) {
+      await client.disconnect().catch(() => {});
+    } else if (typeof client.destroy === 'function') {
+      client.destroy();
+    }
+  }
 }
 
 function normalizeIndexNameToken(token = '') {
@@ -332,15 +361,42 @@ async function findMissingRequiredIndexes(connections, scenario) {
 
   const checks = await Promise.all(
     connections.map(async (connection) => {
+      const supportsSearch = await commandSupportedOnTarget(connection.target, 'FT.SEARCH');
+      if (!supportsSearch) {
+        return {
+          connection,
+          supportsSearch: false,
+          missingIndexes: requiredIndexes,
+        };
+      }
+
       const availableIndexes = new Set(await listSearchIndexes(connection.target));
       const missingIndexes = requiredIndexes.filter((indexName) => !availableIndexes.has(indexName));
 
       return {
         connection,
+        supportsSearch: true,
         missingIndexes,
       };
     }),
   );
+
+  const unsupportedConnections = checks
+    .filter((entry) => entry.supportsSearch === false)
+    .map((entry) => ({
+      id: entry.connection.id,
+      name: entry.connection.name,
+      summary: entry.connection.target.summary,
+    }));
+
+  if (unsupportedConnections.length) {
+    return {
+      unsupportedSearch: true,
+      missingIndexes: requiredIndexes,
+      unsupportedConnections,
+      missingConnections: [],
+    };
+  }
 
   const missingConnections = checks
     .filter((entry) => entry.missingIndexes.length)
@@ -857,6 +913,21 @@ app.post('/api/run', async (req, res) => {
 
   const missingIndexCheck = await findMissingRequiredIndexes(connections, scenario);
   if (missingIndexCheck) {
+    if (missingIndexCheck.unsupportedSearch) {
+      const unsupportedConnectionLabel = missingIndexCheck.unsupportedConnections
+        .map((entry) => entry.name)
+        .join(', ');
+
+      res.status(409).json({
+        success: false,
+        code: 'search_not_supported',
+        error: `This benchmark requires Redis Search/Query Engine support, but ${unsupportedConnectionLabel} does not expose FT.SEARCH. Redis Flex databases without Search support cannot run search presets.`,
+        missingIndexes: missingIndexCheck.missingIndexes,
+        unsupportedConnections: missingIndexCheck.unsupportedConnections,
+      });
+      return;
+    }
+
     const missingIndexLabel = missingIndexCheck.missingIndexes.join(', ');
     const missingConnectionLabel = missingIndexCheck.missingConnections
       .map((entry) => entry.name)
