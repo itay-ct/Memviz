@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 import { buildMemtierConnectionArgs, buildRedisUrl } from './redis-target.js';
+import { hasStaircaseProfile } from '../shared/scenario-load-profile.js';
 
 const DOCKER_IMAGE = 'redislabs/memtier_benchmark:latest';
 export const MEMTIER_REPO_URL = 'https://github.com/RedisLabs/memtier_benchmark';
@@ -17,6 +18,8 @@ let runtimePromise;
 let localVersionPromise;
 let dockerVersionPromise;
 let dockerHostAddressPromise;
+let localHelpPromise;
+let dockerHelpPromise;
 
 function compareVersions(left, right) {
   const leftParts = String(left ?? '0')
@@ -324,7 +327,7 @@ function captureProcessOutput(command, args) {
 
 async function localRuntimeSupportsStatsd() {
   try {
-    const { output } = await captureProcessOutput('memtier_benchmark', ['--help']);
+    const output = await getLocalRuntimeHelp();
     return output.includes('--statsd-host');
   } catch {
     return false;
@@ -333,18 +336,37 @@ async function localRuntimeSupportsStatsd() {
 
 async function dockerRuntimeSupportsStatsd() {
   try {
-    const { output } = await captureProcessOutput('docker', [
+    const output = await getDockerRuntimeHelp();
+    return output.includes('--statsd-host');
+  } catch {
+    return false;
+  }
+}
+
+async function getLocalRuntimeHelp() {
+  if (!localHelpPromise) {
+    localHelpPromise = captureProcessOutput('memtier_benchmark', ['--help'])
+      .then(({ output }) => output)
+      .catch(() => '');
+  }
+
+  return localHelpPromise;
+}
+
+async function getDockerRuntimeHelp() {
+  if (!dockerHelpPromise) {
+    dockerHelpPromise = captureProcessOutput('docker', [
       'run',
       '--rm',
       ...getDockerHostFlags(),
       DOCKER_IMAGE,
       '--help',
-    ]);
-
-    return output.includes('--statsd-host');
-  } catch {
-    return false;
+    ])
+      .then(({ output }) => output)
+      .catch(() => '');
   }
+
+  return dockerHelpPromise;
 }
 
 function extractMemtierVersion(output) {
@@ -441,6 +463,8 @@ export function resetRuntimeResolution() {
   localVersionPromise = undefined;
   dockerVersionPromise = undefined;
   dockerHostAddressPromise = undefined;
+  localHelpPromise = undefined;
+  dockerHelpPromise = undefined;
 }
 
 export function pullDockerImage({ onLine }) {
@@ -503,6 +527,26 @@ export async function resolveMemtierMetadata() {
     minimumVersion: MIN_MEMTIER_VERSION,
     repoUrl: MEMTIER_REPO_URL,
   };
+}
+
+export async function assertRuntimeSupportsScenario(runtime, scenario) {
+  if (!hasStaircaseProfile(scenario?.config)) {
+    return;
+  }
+
+  const helpOutput = runtime.kind === 'docker'
+    ? await getDockerRuntimeHelp()
+    : await getLocalRuntimeHelp();
+  const supportsStaircase =
+    helpOutput.includes('--clients-start') &&
+    helpOutput.includes('--clients-step') &&
+    helpOutput.includes('--step-duration');
+
+  if (!supportsStaircase) {
+    throw new Error(
+      'The selected Memtier runtime does not support staircase ramp-up flags yet. Update memtier_benchmark or use a newer Docker image.',
+    );
+  }
 }
 
 export async function buildMemtierCommand({ runLabel, runtime, scenario, target }) {

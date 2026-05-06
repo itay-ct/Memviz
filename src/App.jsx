@@ -29,6 +29,15 @@ import pipelineIconWhite from './assets/icons/redis/pipeline-white.svg';
 import settingsIconMidnight from './assets/icons/redis/settings-midnight.svg';
 import settingsIconWhite from './assets/icons/redis/settings-white.svg';
 import { BLANK_DATASET_YAML, BLANK_STORAGE_YAML } from './datasetPresets.js';
+import { applyScenarioDraftConfigChange } from './scenarioDraftConfig.js';
+import {
+  estimateAverageActiveClientsPerThread,
+  estimateStaircaseThroughput,
+  formatLoadProfileSummary,
+  getMinimumRampDurationSeconds,
+  getReachedClientsPerThreadAtTime,
+  hasStaircaseProfile,
+} from '../shared/scenario-load-profile.js';
 
 function CheckIcon() {
   return (
@@ -114,7 +123,7 @@ const EMPTY_APP_STATE = {
 };
 
 const EMPTY_META = {
-  appVersion: '1.0.0',
+  appVersion: '1.1.1',
   appPort: 3000,
   appUrl: 'http://127.0.0.1:3000',
   memtier: {
@@ -608,8 +617,8 @@ function getDurationSeconds(startedAt, endedAt) {
 }
 
 function formatControlValue(field, value) {
-  if (field === 'testTime') {
-    return `${value}s`;
+  if (field === 'testTime' || field === 'stepDuration') {
+    return formatDurationLabel(value);
   }
 
   if (field === 'requestCount') {
@@ -632,7 +641,7 @@ function formatRunLimit(config) {
     return `${formatCompactInteger(config.requestCount)} requests/client`;
   }
 
-  return `${config.testTime}s`;
+  return formatDurationLabel(config.testTime);
 }
 
 function formatCommandPreview(command) {
@@ -690,7 +699,7 @@ function describeScenarioShape(config) {
 
 function describeDraftConfig(config) {
   return [
-    `${config.clients} clients/thread`,
+    formatLoadProfileSummary(config),
     `${config.threads} threads`,
     formatRunLimit(config),
     `pipe ${config.pipeline}`,
@@ -1043,29 +1052,43 @@ function getGeneratedDatasetDetails(run, scenario, config) {
     estimatedThroughput = estimatedScenarioThroughput;
   }
 
+  const staircaseAdjustedThroughput = hasStaircaseProfile(config)
+    ? estimateStaircaseThroughput(estimatedThroughput, config)
+    : estimatedThroughput;
+
   const hasEstimatedThroughput =
-    estimatedThroughput !== null &&
-    estimatedThroughput !== undefined &&
-    !Number.isNaN(estimatedThroughput);
+    staircaseAdjustedThroughput !== null &&
+    staircaseAdjustedThroughput !== undefined &&
+    !Number.isNaN(staircaseAdjustedThroughput);
 
   if (hasConfiguredDuration && hasEstimatedThroughput) {
-    const bytes = config.dataSize * estimatedThroughput * configuredDurationSeconds * writeRatio;
+    const bytes = config.dataSize * staircaseAdjustedThroughput * configuredDurationSeconds * writeRatio;
+    const averageActiveClients = estimateAverageActiveClientsPerThread(config);
     const throughputSource = config.rateLimitEnabled
       ? !Number.isNaN(estimatedScenarioThroughput)
         ? `min(rate limit ${configuredRateLimit.toFixed(0)} ops/sec, preset estimate ${estimatedScenarioThroughput.toFixed(0)} ops/sec)`
         : `rate limit ${configuredRateLimit.toFixed(0)} ops/sec`
       : `preset estimate ${estimatedThroughput.toFixed(0)} ops/sec`;
+    const approximationLine =
+      hasStaircaseProfile(config) && averageActiveClients
+        ? `Approximation: staircase average ${averageActiveClients.toFixed(1)} of ${config.clients} clients/thread.`
+        : null;
 
     return {
       bytes,
       label: 'Estimated data',
       tooltip: [
-        'Pre-run estimate for this time-based write workload.',
+        hasStaircaseProfile(config)
+          ? 'Approximate pre-run estimate for this staircase workload.'
+          : 'Pre-run estimate for this time-based write workload.',
         'Formula: data size × estimated ops/sec × duration × write ratio',
-        `= ${config.dataSize} B × ${estimatedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
+        `= ${config.dataSize} B × ${staircaseAdjustedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
         `Throughput source: ${throughputSource}`,
+        approximationLine,
         `Write ratio: ${config.setRatio}:${config.getRatio}`,
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
     };
   }
 
@@ -1181,29 +1204,43 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
     estimatedThroughput = estimatedScenarioThroughput;
   }
 
+  const staircaseAdjustedThroughput = hasStaircaseProfile(config)
+    ? estimateStaircaseThroughput(estimatedThroughput, config)
+    : estimatedThroughput;
+
   const hasEstimatedThroughput =
-    estimatedThroughput !== null &&
-    estimatedThroughput !== undefined &&
-    !Number.isNaN(estimatedThroughput);
+    staircaseAdjustedThroughput !== null &&
+    staircaseAdjustedThroughput !== undefined &&
+    !Number.isNaN(staircaseAdjustedThroughput);
 
   if (hasConfiguredDuration && hasEstimatedThroughput) {
-    const bytes = config.dataSize * estimatedThroughput * configuredDurationSeconds * writeRatio;
+    const bytes = config.dataSize * staircaseAdjustedThroughput * configuredDurationSeconds * writeRatio;
+    const averageActiveClients = estimateAverageActiveClientsPerThread(config);
     const throughputSource = config.rateLimitEnabled
       ? !Number.isNaN(estimatedScenarioThroughput)
         ? `min(rate limit ${configuredRateLimit.toFixed(0)} ops/sec, preset estimate ${estimatedScenarioThroughput.toFixed(0)} ops/sec)`
         : `rate limit ${configuredRateLimit.toFixed(0)} ops/sec`
       : `preset estimate ${estimatedThroughput.toFixed(0)} ops/sec`;
+    const approximationLine =
+      hasStaircaseProfile(config) && averageActiveClients
+        ? `Approximation: staircase average ${averageActiveClients.toFixed(1)} of ${config.clients} clients/thread.`
+        : null;
 
     return {
       bytes,
-      label: 'Est Generated data',
+      label: 'Estimated data',
       tooltip: [
-        'Final generated data estimate for this time-based write workload.',
+        hasStaircaseProfile(config)
+          ? 'Approximate generated data estimate for this staircase workload.'
+          : 'Final generated data estimate for this time-based write workload.',
         'Formula: data size × estimated ops/sec × duration × write ratio',
-        `= ${config.dataSize} B × ${estimatedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
+        `= ${config.dataSize} B × ${staircaseAdjustedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
         `Throughput source: ${throughputSource}`,
+        approximationLine,
         `Write ratio: ${config.setRatio}:${config.getRatio}`,
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
     };
   }
 
@@ -1370,8 +1407,8 @@ function buildAdvancedMetricItems(run) {
 
 function buildSetupItems(config) {
   const items = [
-    { label: 'Clients / thread', value: `${config.clients}` },
-    { label: 'Threads', value: `${config.threads}` },
+    { label: hasStaircaseProfile(config) ? 'Max clients' : 'Clients / thread', value: `${config.clients}` },
+    { label: 'Threads per client', value: `${config.threads}` },
     { label: 'Run limit', value: formatRunLimit(config) },
     { label: 'Key prefix', value: config.keyPrefix },
     { label: 'Pipeline', value: `${config.pipeline}` },
@@ -1488,6 +1525,7 @@ function getComparisonSnapshot(run, draft) {
     label: getRunLabel(run, draft),
     connection: run.connectionName ?? run.target?.summary ?? null,
     clients: config.clients ?? run.summary?.config.connectionsPerThread ?? null,
+    loadProfile: formatLoadProfileSummary(config),
     threads: config.threads ?? run.summary?.config.threads ?? null,
     runLimit: config.limitMode ? formatRunLimit(config) : null,
     command: config.command ?? null,
@@ -1536,7 +1574,11 @@ function buildComparisonRows(runsWithDrafts) {
       values: snapshots.map((snapshot) => formatMetric(snapshot.clients, String)),
     },
     {
-      label: 'Threads',
+      label: 'Load profile',
+      values: snapshots.map((snapshot) => snapshot.loadProfile ?? '—'),
+    },
+    {
+      label: 'Threads per client',
       values: snapshots.map((snapshot) => formatMetric(snapshot.threads, String)),
     },
     {
@@ -2504,6 +2546,22 @@ function GeneratedDataMetric({
   );
 }
 
+function CurrentClientsMetric({ className = '', run }) {
+  const currentClients =
+    run?.metrics?.connections ??
+    getSeriesValueAtEnd(run?.series?.connections ?? []);
+  const currentClientsLabel =
+    currentClients === null || currentClients === undefined || Number.isNaN(currentClients)
+      ? '—'
+      : formatConnections(currentClients);
+
+  return (
+    <span className={`generated-data-metric ${className}`.trim()}>
+      <span className="generated-data-label">{`Current clients: ${currentClientsLabel}`}</span>
+    </span>
+  );
+}
+
 function ConnectionCard({
   connection,
   disconnectDisabled,
@@ -3037,6 +3095,109 @@ function NumericCellControl({ disabled, limits, onChange, value }) {
   );
 }
 
+function getDurationUnit(value) {
+  return Number(value) >= 120 ? 'min' : 'sec';
+}
+
+function formatDurationInputValue(value, unit) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return '';
+  }
+
+  if (unit === 'min') {
+    return String(Math.max(2, Math.round(numericValue / 60)));
+  }
+
+  return String(numericValue);
+}
+
+function DurationCellControl({ disabled, limits, onChange, value }) {
+  const [unit, setUnit] = useState(() => getDurationUnit(value));
+  const [draftValue, setDraftValue] = useState(() => formatDurationInputValue(value, unit));
+
+  useEffect(() => {
+    if (Number(value) < 120 && unit === 'min') {
+      setUnit('sec');
+      return;
+    }
+
+    setDraftValue(formatDurationInputValue(value, unit));
+  }, [unit, value]);
+
+  function commit(nextRawValue) {
+    const parsed = Number(nextRawValue);
+    let normalizedValue;
+
+    if (unit === 'min') {
+      const nextMinutes = Number.isFinite(parsed) ? parsed : Math.round(value / 60);
+      normalizedValue = Math.round(Math.max(2, nextMinutes)) * 60;
+    } else {
+      const nextSeconds = Number.isFinite(parsed) ? parsed : value;
+      normalizedValue =
+        nextSeconds > 120
+          ? Math.round(Math.max(2, nextSeconds / 60)) * 60
+          : nextSeconds;
+    }
+
+    const nextValue = clampValue(normalizedValue, limits);
+    const nextUnit = nextValue >= 120 ? unit : 'sec';
+    setUnit(nextUnit);
+    setDraftValue(formatDurationInputValue(nextValue, nextUnit));
+    onChange(nextValue);
+  }
+
+  function handleUnitToggle() {
+    if (disabled) {
+      return;
+    }
+
+    if (unit === 'sec') {
+      const nextValue = value < 120 ? 120 : Math.round(value / 60) * 60;
+      setUnit('min');
+      onChange(clampValue(nextValue, limits));
+      return;
+    }
+
+    setUnit('sec');
+    onChange(clampValue(value < 120 ? 120 : value, limits));
+  }
+
+  return (
+    <div className="table-number-control table-number-control-with-suffix">
+      <input
+        disabled={disabled}
+        inputMode="numeric"
+        max={unit === 'min' ? limits.max / 60 : 120}
+        min={unit === 'min' ? limits.min / 60 : limits.min}
+        onBlur={() => commit(draftValue)}
+        onChange={(event) => setDraftValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            commit(draftValue);
+          }
+
+          if (event.key === 'Escape') {
+            setDraftValue(formatDurationInputValue(value, unit));
+          }
+        }}
+        step={unit === 'min' ? 1 : Math.max(1, limits.step)}
+        type="number"
+        value={draftValue}
+      />
+      <button
+        className="table-number-suffix table-number-suffix-button"
+        disabled={disabled}
+        onClick={handleUnitToggle}
+        type="button"
+      >
+        {unit}
+      </button>
+    </div>
+  );
+}
+
 function TextCellControl({
   disabled,
   multiline = false,
@@ -3082,6 +3243,59 @@ function ConfigRow({ label, children }) {
   );
 }
 
+function StaircaseConfigRow({ children, groupEnd = false, label }) {
+  return (
+    <tr className={`config-table-row config-table-row-grouped ${groupEnd ? 'config-table-row-group-end' : ''}`.trim()}>
+      <th>{label}</th>
+      <td>{children}</td>
+    </tr>
+  );
+}
+
+function formatDurationLabel(seconds) {
+  const numericSeconds = Number(seconds);
+  if (!Number.isFinite(numericSeconds) || numericSeconds <= 0) {
+    return '0s';
+  }
+
+  const minutes = Math.floor(numericSeconds / 60);
+  const remainder = numericSeconds % 60;
+
+  if (!minutes) {
+    return `${numericSeconds}s`;
+  }
+
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function buildStaircaseRampWarning(config) {
+  if (!hasStaircaseProfile(config)) {
+    return null;
+  }
+
+  const minimumDurationSeconds = getMinimumRampDurationSeconds(config);
+  const configuredDurationSeconds = Number(config?.testTime ?? NaN);
+  if (
+    !minimumDurationSeconds ||
+    !Number.isFinite(configuredDurationSeconds) ||
+    configuredDurationSeconds >= minimumDurationSeconds
+  ) {
+    return null;
+  }
+
+  const reachedClients = getReachedClientsPerThreadAtTime(config, configuredDurationSeconds);
+  return {
+    message: [
+      `This staircase needs at least ${formatDurationLabel(minimumDurationSeconds)} to reach the full ${config.clients} clients/thread target.`,
+      reachedClients
+        ? `With the current ${formatDurationLabel(configuredDurationSeconds)} limit it ramps to about ${reachedClients} clients/thread before the run ends.`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' '),
+  };
+}
+
 function ConfigTable({
   config,
   disabled,
@@ -3092,13 +3306,18 @@ function ConfigTable({
   const runLimitField = isRequests ? 'requestCount' : 'testTime';
   const runLimitLimits = isRequests ? scenario.limits.requestCount : scenario.limits.testTime;
   const isCommandScenario = scenario.kind === 'command';
+  const staircaseEnabled = config.staircaseEnabled && !isRequests;
+  const staircaseToggleDisabled = disabled || isRequests || config.clients <= 1;
+  const staircaseWarning = staircaseEnabled ? buildStaircaseRampWarning(config) : null;
+  const clientLabel = staircaseEnabled ? 'Max clients' : 'Clients / thread';
+  const threadLabel = 'Threads per client';
 
   return (
     <div className="config-table-shell" onClick={(event) => event.stopPropagation()}>
       <table className="config-table-ui">
         <tbody>
           <ConfigRow label="Run limit">
-            <div className="config-composite-control config-composite-control-paired">
+            <div className="config-composite-control config-composite-control-stacked">
               <ComboButton
                 className="combo-button-cell"
                 disabled={disabled}
@@ -3109,12 +3328,21 @@ function ConfigTable({
                 ]}
                 value={config.limitMode}
               />
-              <NumericCellControl
-                disabled={disabled}
-                limits={runLimitLimits}
-                onChange={(nextValue) => onConfigChange(runLimitField, nextValue)}
-                value={config[runLimitField]}
-              />
+              {isRequests ? (
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={runLimitLimits}
+                  onChange={(nextValue) => onConfigChange(runLimitField, nextValue)}
+                  value={config[runLimitField]}
+                />
+              ) : (
+                <DurationCellControl
+                  disabled={disabled}
+                  limits={runLimitLimits}
+                  onChange={(nextValue) => onConfigChange(runLimitField, nextValue)}
+                  value={config[runLimitField]}
+                />
+              )}
             </div>
           </ConfigRow>
 
@@ -3140,16 +3368,67 @@ function ConfigTable({
             </div>
           </ConfigRow>
 
-          <ConfigRow label="Clients / thread">
+          <StaircaseConfigRow label="">
+            <div className="config-composite-control config-composite-control-paired">
+              <label className="config-checkbox config-checkbox-wide">
+                <input
+                  checked={staircaseEnabled}
+                  disabled={staircaseToggleDisabled}
+                  onChange={(event) => onConfigChange('staircaseEnabled', event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Staircase</span>
+                {staircaseWarning ? (
+                  <span className="run-warning-anchor" tabIndex={0}>
+                    <WarningIcon />
+                    <span className="run-warning-tooltip">{staircaseWarning.message}</span>
+                  </span>
+                ) : null}
+              </label>
+            </div>
+          </StaircaseConfigRow>
+
+          <StaircaseConfigRow groupEnd={!staircaseEnabled} label={clientLabel}>
             <NumericCellControl
               disabled={disabled}
               limits={scenario.limits.clients}
               onChange={(nextValue) => onConfigChange('clients', nextValue)}
               value={config.clients}
             />
-          </ConfigRow>
+          </StaircaseConfigRow>
 
-          <ConfigRow label="Threads">
+          {staircaseEnabled ? (
+            <>
+              <StaircaseConfigRow label="Start clients">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.clientsStart}
+                  onChange={(nextValue) => onConfigChange('clientsStart', nextValue)}
+                  value={config.clientsStart}
+                />
+              </StaircaseConfigRow>
+
+              <StaircaseConfigRow label="Clients added / step">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.clientsStep}
+                  onChange={(nextValue) => onConfigChange('clientsStep', nextValue)}
+                  value={config.clientsStep}
+                />
+              </StaircaseConfigRow>
+
+              <StaircaseConfigRow groupEnd label="Step duration">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.stepDuration}
+                  onChange={(nextValue) => onConfigChange('stepDuration', nextValue)}
+                  value={config.stepDuration}
+                />
+              </StaircaseConfigRow>
+            </>
+          ) : null}
+
+          <ConfigRow label={threadLabel}>
             <NumericCellControl
               disabled={disabled}
               limits={scenario.limits.threads}
@@ -3474,6 +3753,12 @@ function ScenarioCard({
               scenario={scenario}
               variant="estimated"
             />
+            {run?.status === 'running' && hasStaircaseProfile(config) ? (
+              <>
+                <span className="scenario-subtitle-separator">•</span>
+                <CurrentClientsMetric className="scenario-generated-data" run={run} />
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -3801,10 +4086,15 @@ function RealtimeTooltip({ formatter, active, label, payload }) {
     return null;
   }
 
+  const firstEntry = payload.find((entry) => entry?.value !== null && entry?.value !== undefined) ?? payload[0];
+  if (!firstEntry) {
+    return null;
+  }
+
   return (
     <div className="chart-tooltip">
       <span>{label}</span>
-      <strong>{formatter(payload[0].value)}</strong>
+      <strong>{formatter(firstEntry.value)}</strong>
     </div>
   );
 }
@@ -3846,6 +4136,10 @@ function ChartStatPicker({ onChange, options, selectedKey }) {
   const [isOpen, setIsOpen] = useState(false);
   const selected = options.find((option) => option.key === selectedKey) ?? options[0];
 
+  if (!selected) {
+    return null;
+  }
+
   useEffect(() => {
     setIsOpen(false);
   }, [selectedKey]);
@@ -3885,6 +4179,10 @@ function ChartStatPicker({ onChange, options, selectedKey }) {
 function CompareMetricPicker({ onChange, options, selectedKey }) {
   const [isOpen, setIsOpen] = useState(false);
   const selected = options.find((option) => option.key === selectedKey) ?? options[0];
+
+  if (!selected) {
+    return null;
+  }
 
   useEffect(() => {
     setIsOpen(false);
@@ -4009,6 +4307,21 @@ function CompareTimeseriesChart({
 }) {
   const options = buildCompareMetricOptions(comparedRuns, metricKind);
   const selectedOption = options.find((option) => option.key === selectedMetricKey) ?? options[0];
+  if (!selectedOption) {
+    return (
+      <section className="chart-panel compare-chart-panel">
+        <div className="chart-header">
+          <div className="chart-title-row">
+            <p className="eyebrow">{title}</p>
+          </div>
+        </div>
+
+        <div className="chart-area">
+          <div className="chart-empty">Waiting for samples</div>
+        </div>
+      </section>
+    );
+  }
   const data = buildCompareTimelineData(comparedRuns, selectedOption.key);
   const seriesMeta = comparedRuns.map(({ draft, run }, index) => ({
     color: colorMap[index],
@@ -4628,6 +4941,12 @@ function MetricsPanel({ draft, run }) {
           <p className="metrics-subtitle">{run.scenarioDescription}</p>
           <p className="metrics-subtitle metrics-subtitle-secondary">
             <GeneratedDataMetric config={run.scenarioConfig ?? {}} run={run} scenario={null} />
+            {run?.status === 'running' && hasStaircaseProfile(run.scenarioConfig ?? {}) ? (
+              <>
+                <span className="scenario-subtitle-separator">•</span>
+                <CurrentClientsMetric run={run} />
+              </>
+            ) : null}
           </p>
         </div>
 
@@ -5165,54 +5484,12 @@ export default function App() {
       return;
     }
 
-    if (field === 'limitMode' || field === 'rateLimitEnabled') {
-      setDrafts((currentDrafts) =>
-        currentDrafts.map((entry) =>
-          entry.id === scenarioId
-            ? {
-                ...entry,
-                config: {
-                  ...entry.config,
-                  [field]: nextValue,
-                },
-              }
-            : entry,
-        ),
-      );
-      return;
-    }
-
-    if (field === 'command' || field === 'keyPrefix') {
-      setDrafts((currentDrafts) =>
-        currentDrafts.map((entry) =>
-          entry.id === scenarioId
-            ? {
-                ...entry,
-                config: {
-                  ...entry.config,
-                  [field]: nextValue,
-                },
-              }
-            : entry,
-        ),
-      );
-      return;
-    }
-
-    const limits = scenario.limits[field];
-    if (!limits) {
-      return;
-    }
-
     setDrafts((currentDrafts) =>
       currentDrafts.map((entry) =>
         entry.id === scenarioId
           ? {
               ...entry,
-              config: {
-                ...entry.config,
-                [field]: clampValue(nextValue, limits),
-              },
+              config: applyScenarioDraftConfigChange(entry.config, scenario, field, nextValue),
             }
           : entry,
       ),

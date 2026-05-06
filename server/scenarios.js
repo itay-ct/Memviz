@@ -1,3 +1,9 @@
+import {
+  estimateAverageActiveClientsPerThread,
+  formatLoadProfileSummary,
+  hasStaircaseProfile,
+} from '../shared/scenario-load-profile.js';
+
 function formatCompactInteger(value) {
   if (value >= 1000000) {
     return `${(value / 1000000).toFixed(value % 1000000 === 0 ? 0 : 1)}M`;
@@ -24,8 +30,11 @@ function formatCommandPreview(command) {
 
 const sharedLimits = {
   clients: { min: 1, max: 200, step: 1, label: 'Clients / thread' },
+  clientsStart: { min: 1, max: 200, step: 1, label: 'Start clients / thread' },
+  clientsStep: { min: 1, max: 200, step: 1, label: 'Clients added per step' },
   threads: { min: 1, max: 16, step: 1, label: 'Threads' },
-  testTime: { min: 5, max: 300, step: 5, label: 'Seconds' },
+  stepDuration: { min: 1, max: 300, step: 1, label: 'Step duration' },
+  testTime: { min: 5, max: 1800, step: 5, label: 'Time limit' },
   requestCount: { min: 1, max: 1000000, step: 100, label: 'Requests / client' },
   rateLimit: { min: 1000, max: 100000, step: 1000, label: 'Rate limit / sec' },
   pipeline: { min: 1, max: 500, step: 1, label: 'Pipeline' },
@@ -37,7 +46,10 @@ const sharedLimits = {
 function buildScenarioLimits(kind) {
   const limits = {
     clients: sharedLimits.clients,
+    clientsStart: sharedLimits.clientsStart,
+    clientsStep: sharedLimits.clientsStep,
     threads: sharedLimits.threads,
+    stepDuration: sharedLimits.stepDuration,
     testTime: sharedLimits.testTime,
     requestCount: sharedLimits.requestCount,
     rateLimit: sharedLimits.rateLimit,
@@ -66,9 +78,10 @@ function scenarioDescription(config, kind) {
     kind === 'command'
       ? formatCommandPreview(config.command)
       : `${config.setRatio}:${config.getRatio} mix • ${config.dataSize} B`;
+  const loadProfileLabel = formatLoadProfileSummary(config);
 
   return [
-    `${config.clients} clients/thread`,
+    loadProfileLabel,
     `${config.threads} threads`,
     durationLabel,
     `pipe ${config.pipeline}`,
@@ -206,6 +219,57 @@ function validateScenarioDefaults(kind, defaults, limits) {
   if (kind === 'command' && !defaults.command) {
     throw createValidationError('Command is required.');
   }
+
+  if (hasStaircaseProfile(defaults)) {
+    if (defaults.limitMode !== 'time') {
+      throw createValidationError('Staircase mode only works with time-based runs.');
+    }
+
+    if (defaults.clientsStart >= defaults.clients) {
+      throw createValidationError('Start clients / thread must stay below the final clients / thread target.');
+    }
+  }
+}
+
+function hasOwnValue(object, key) {
+  return Object.prototype.hasOwnProperty.call(object ?? {}, key);
+}
+
+function validateStaircaseInput(rawConfig, config) {
+  if (!config.staircaseEnabled) {
+    return;
+  }
+
+  if (config.limitMode !== 'time') {
+    throw createValidationError('Staircase mode only works with time-based runs.');
+  }
+
+  const hasStart = hasOwnValue(rawConfig, 'clientsStart');
+  const hasStartAlias = hasOwnValue(rawConfig, 'clients_start');
+  const hasStep = hasOwnValue(rawConfig, 'clientsStep');
+  const hasStepAlias = hasOwnValue(rawConfig, 'clients_step');
+  const hasDuration = hasOwnValue(rawConfig, 'stepDuration');
+  const hasDurationAlias = hasOwnValue(rawConfig, 'step_duration');
+  const providedCount = [
+    hasStart || hasStartAlias,
+    hasStep || hasStepAlias,
+    hasDuration || hasDurationAlias,
+  ].filter(Boolean).length;
+
+  if (providedCount > 0 && providedCount < 3) {
+    throw createValidationError(
+      'Staircase mode requires clientsStart, clientsStep, and stepDuration together.',
+    );
+  }
+
+  if (config.clientsStart >= config.clients) {
+    throw createValidationError('Start clients / thread must stay below the final clients / thread target.');
+  }
+
+  const averageClients = estimateAverageActiveClientsPerThread(config);
+  if (averageClients === null) {
+    throw createValidationError('Staircase mode requires valid start clients, client step, and step duration values.');
+  }
 }
 
 export function normalizeScenarioDefinition(input = {}) {
@@ -218,10 +282,17 @@ export function normalizeScenarioDefinition(input = {}) {
   const rawDefaults = input.defaults ?? {};
   const defaults = {
     clients: normalizeInteger(rawDefaults.clients, 1),
+    clientsStart: normalizeInteger(rawDefaults.clientsStart ?? rawDefaults.clients_start, 1),
+    clientsStep: normalizeInteger(rawDefaults.clientsStep ?? rawDefaults.clients_step, 1),
     threads: normalizeInteger(rawDefaults.threads, 1),
+    stepDuration: normalizeInteger(rawDefaults.stepDuration ?? rawDefaults.step_duration, 5),
     testTime: normalizeInteger(rawDefaults.testTime, 20),
     limitMode: normalizeString(rawDefaults.limitMode, 'time').trim() || 'time',
     requestCount: normalizeInteger(rawDefaults.requestCount, 150000),
+    staircaseEnabled: normalizeBoolean(
+      rawDefaults.staircaseEnabled ?? rawDefaults.staircase_enabled,
+      false,
+    ),
     rateLimitEnabled: normalizeBoolean(rawDefaults.rateLimitEnabled, false),
     rateLimit: normalizeInteger(rawDefaults.rateLimit, 20000),
     pipeline: normalizeInteger(rawDefaults.pipeline, 1),
@@ -239,6 +310,7 @@ export function normalizeScenarioDefinition(input = {}) {
   }
 
   validateScenarioDefaults(kind, defaults, limits);
+  validateStaircaseInput(rawDefaults, defaults);
 
   return {
     id: requireNonEmptyString(input.id, 'Scenario id is required.'),
@@ -262,6 +334,10 @@ export function normalizeScenarioDefinition(input = {}) {
 export function normalizeScenarioConfig(scenario, input = {}) {
   const config = {
     limitMode: input.limitMode ?? scenario.defaults.limitMode ?? 'time',
+    staircaseEnabled: normalizeBoolean(
+      input.staircaseEnabled ?? input.staircase_enabled,
+      scenario.defaults.staircaseEnabled ?? false,
+    ),
     rateLimitEnabled: normalizeBoolean(
       input.rateLimitEnabled,
       scenario.defaults.rateLimitEnabled ?? false,
@@ -298,6 +374,8 @@ export function normalizeScenarioConfig(scenario, input = {}) {
     throw createValidationError('Command is required.');
   }
 
+  validateStaircaseInput(input, config);
+
   return config;
 }
 
@@ -330,6 +408,17 @@ export function buildMemtierArgsFromConfig(scenario, config) {
     args.push('--requests', String(config.requestCount));
   } else {
     args.push('--test-time', String(config.testTime));
+  }
+
+  if (config.staircaseEnabled) {
+    args.push(
+      '--clients-start',
+      String(config.clientsStart),
+      '--clients-step',
+      String(config.clientsStep),
+      '--step-duration',
+      String(config.stepDuration),
+    );
   }
 
   if (config.rateLimitEnabled) {

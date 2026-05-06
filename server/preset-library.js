@@ -140,7 +140,7 @@ function ensureUniqueIds(items, idKey, itemLabel) {
   }
 }
 
-function normalizePresetDocument(rawPreset = {}, fileName) {
+export function normalizePresetDocument(rawPreset = {}, fileName) {
   const tests = Array.isArray(rawPreset.tests)
     ? rawPreset.tests.map((entry) => normalizeScenarioDefinition(entry))
     : [];
