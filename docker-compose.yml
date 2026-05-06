@@ -17,7 +17,7 @@ services:
       - "3000:3000"
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.4
     container_name: memviz-redis
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
