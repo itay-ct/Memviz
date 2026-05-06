@@ -70,13 +70,15 @@ const APP_VERSION = '1.1.0';
 const APP_PORT = Number(process.env.PORT ?? 3000);
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
 const MAX_CONNECTIONS = 3;
+const DEFAULT_REDIS_HOST = process.env.MEMVIZ_DEFAULT_REDIS_HOST ?? '127.0.0.1';
+const DEFAULT_REDIS_PORT = process.env.MEMVIZ_DEFAULT_REDIS_PORT ?? '6379';
 const DEFAULT_TARGET_INPUT = {
-  hostOrUrl: '127.0.0.1',
-  port: '6379',
+  hostOrUrl: DEFAULT_REDIS_HOST,
+  port: DEFAULT_REDIS_PORT,
   username: 'default',
   password: '',
 };
-const DEFAULT_TARGET_NAME = '127.0.0.1:6379';
+const DEFAULT_TARGET_NAME = `${DEFAULT_REDIS_HOST}:${DEFAULT_REDIS_PORT}`;
 let attemptedDefaultConnectionBootstrap = false;
 const rttProbeConnectionIds = new Set();
 const runningMemtierChildren = new Map();

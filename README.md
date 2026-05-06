@@ -51,6 +51,26 @@ Official Memtier repository:
 
 Local Redis without auth works out of the box at `127.0.0.1:6379`.
 
+## PS Portal Packaging
+
+This repo includes a first-pass PS Portal packaging flow for a self-contained demo image:
+
+- `docker-compose.yml` starts `memviz` and a local Redis together.
+- `Dockerfile` builds the production Memviz container and installs `memtier_benchmark`.
+- `build.sh` prepares a Linux VM image with Docker, Node.js 20+, and a host copy of `memtier_benchmark`.
+- `start.sh` boots the compose stack on VM startup.
+- `.github/workflows/trigger-build.yaml` triggers the centralized PS Portal image builder.
+
+The compose stack exposes only Memviz on port `3000`. Inside the portal image, Memviz uses environment overrides so its default Redis target points at the bundled `redis` service.
+
+For the first image, use these defaults in the portal flow:
+
+- main application port: `3000`
+- image source: "I've my own image"
+- required GitHub secrets:
+  - `SOURCE_REPO_READ_TOKEN`
+  - `PS_IMAGE_BUILDER_TOKEN`
+
 ## Presets
 
 A preset is a single YAML file that groups together a workflow's built-in benchmark tests and its built-in dataset presets.
