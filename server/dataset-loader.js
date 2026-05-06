@@ -333,7 +333,11 @@ async function dropSearchIndexIfNeeded(client, storageSpec) {
   try {
     await client.sendCommand(['FT.DROPINDEX', indexName, 'DD']);
   } catch (error) {
-    if (/unknown index name/i.test(error.message) || /unknown command/i.test(error.message)) {
+    if (
+      /unknown index name/i.test(error.message) ||
+      /no such index/i.test(error.message) ||
+      /unknown command/i.test(error.message)
+    ) {
       return;
     }
 
