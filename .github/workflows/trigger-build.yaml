@@ -21,6 +21,26 @@ jobs:
           ENCODED_TOKEN=$(echo -n "${SOURCE_REPO_READ_TOKEN}" | base64 | tr -d '\n')
           echo "encoded_token=${ENCODED_TOKEN}" >> "$GITHUB_OUTPUT"
 
+      - name: Normalize image name
+        id: image_name
+        run: |
+          RAW_NAME="${GITHUB_REPOSITORY#*/}"
+          NORMALIZED_NAME=$(printf '%s' "${RAW_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//')
+
+          if [ -z "${NORMALIZED_NAME}" ]; then
+            NORMALIZED_NAME="memviz"
+          fi
+
+          case "${NORMALIZED_NAME}" in
+            [a-z]*)
+              ;;
+            *)
+              NORMALIZED_NAME="img-${NORMALIZED_NAME}"
+              ;;
+          esac
+
+          echo "image_name=${NORMALIZED_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Trigger infra repo build
         uses: peter-evans/repository-dispatch@v3
         with:
@@ -31,7 +51,7 @@ jobs:
             {
               "source_repo_url": "https://github.com/${{ github.repository }}",
               "source_repo_ref": "${{ github.ref_name }}",
-              "image_name": "${{ github.event.repository.name }}",
+              "image_name": "${{ steps.image_name.outputs.image_name }}",
               "image_version": "${{ inputs.image_version }}",
               "source_dir": "",
               "clone_token": "${{ steps.encode.outputs.encoded_token }}"
@@ -44,6 +64,7 @@ jobs:
           echo "Build details:"
           echo "  Source Repo: https://github.com/${{ github.repository }}"
           echo "  Source Ref:  ${{ github.ref_name }}"
+          echo "  Image Name: ${{ steps.image_name.outputs.image_name }}"
           echo "  Image Version: ${{ inputs.image_version }}"
           echo ""
           echo "Check build status at:"
