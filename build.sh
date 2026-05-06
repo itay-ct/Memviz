@@ -59,6 +59,7 @@ ensure_memtier() {
     local current_version
     current_version="$(memtier_benchmark --version | sed -E 's/.*v=([^ ]+).*/\1/' | head -n1)"
     if version_ge "$current_version" "2.3.0" && memtier_benchmark --help 2>&1 | grep -q -- '--statsd-host'; then
+      echo "Using host memtier_benchmark ${current_version} with StatsD support."
       return
     fi
   fi
@@ -71,9 +72,11 @@ ensure_memtier() {
   apt-get install -y memtier-benchmark
 
   if ! memtier_benchmark --help 2>&1 | grep -q -- '--statsd-host'; then
-    echo "Installed memtier_benchmark does not expose StatsD support." >&2
-    exit 1
+    echo "Host memtier_benchmark does not expose StatsD support; continuing because the memviz container includes a compatible runtime."
+    return
   fi
+
+  echo "Installed host memtier_benchmark with StatsD support."
 }
 
 prime_runtime_assets() {
