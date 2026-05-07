@@ -123,7 +123,7 @@ const EMPTY_APP_STATE = {
 };
 
 const EMPTY_META = {
-  appVersion: '1.2.0',
+  appVersion: '1.2.1',
   appPort: 3000,
   appUrl: 'http://127.0.0.1:3000',
   memtier: {
