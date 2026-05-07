@@ -123,7 +123,7 @@ const EMPTY_APP_STATE = {
 };
 
 const EMPTY_META = {
-  appVersion: '1.1.1',
+  appVersion: '1.2.0',
   appPort: 3000,
   appUrl: 'http://127.0.0.1:3000',
   memtier: {
@@ -5213,6 +5213,31 @@ export default function App() {
           continue;
         }
 
+        const pendingDraft =
+          runPendingDraftId
+            ? nextDrafts.find((draft) => draft.id === runPendingDraftId)
+            : null;
+
+        if (
+          pendingDraft &&
+          !pendingDraft.runId &&
+          pendingDraft.scenarioId === run.scenarioId &&
+          (pendingDraft.connectionId === null || pendingDraft.connectionId === run.connectionId)
+        ) {
+          nextDrafts = nextDrafts.map((draft) =>
+            draft.id === pendingDraft.id
+              ? {
+                  ...draft,
+                  connectionId: run.connectionId,
+                  isCustomizing: false,
+                  runId: run.id,
+                }
+              : draft,
+          );
+          changed = true;
+          continue;
+        }
+
         const scenario = scenarioMap.get(run.scenarioId);
         if (!scenario) {
           continue;
@@ -5232,7 +5257,7 @@ export default function App() {
 
       return changed ? nextDrafts : currentDrafts;
     });
-  }, [appState.runs, appState.scenarios]);
+  }, [appState.runs, appState.scenarios, runPendingDraftId, visibleRuns]);
 
   useEffect(() => {
     if (!appState.selectedPresetName) {
@@ -5851,6 +5876,54 @@ export default function App() {
 
       runLaunchSnapshotRef.current = launchSnapshot;
 
+      if (scope === 'all' && payload.runs?.length) {
+        const scenario = scenarioMap.get(draft.scenarioId);
+        const preferredRun =
+          payload.runs.find((run) => run.connectionId === selectedConnection?.id) ?? payload.runs[0];
+
+        if (scenario) {
+          const generatedDrafts = payload.runs.map((run) =>
+            createDraft(scenario, {
+              config: run.scenarioConfig,
+              connectionId: run.connectionId,
+              name: draft.name,
+              runId: run.id,
+            }),
+          );
+          const launchedRunIds = new Set(payload.runs.map((run) => run.id));
+
+          setDrafts((currentDrafts) => [
+            ...generatedDrafts,
+            ...currentDrafts.filter(
+              (entry) => entry.id !== draftId && !launchedRunIds.has(entry.runId),
+            ),
+          ]);
+
+          const preferredDraft = generatedDrafts.find((entry) => entry.runId === preferredRun?.id);
+          setSelectedDraftId(preferredDraft?.id ?? draftId);
+        }
+      } else {
+        const nextRun = payload.runs?.[0] ?? null;
+        setDrafts((currentDrafts) => {
+          const dedupedDrafts =
+            nextRun?.id
+              ? currentDrafts.filter((entry) => entry.id === draftId || entry.runId !== nextRun.id)
+              : currentDrafts;
+
+          return dedupedDrafts.map((entry) =>
+            entry.id === draftId
+              ? {
+                  ...entry,
+                  connectionId: nextRun?.connectionId ?? entry.connectionId,
+                  isCustomizing: false,
+                  runId: nextRun?.id ?? entry.runId,
+                }
+              : entry,
+          );
+        });
+        setSelectedDraftId(draftId);
+      }
+
       if (payload.runs?.length) {
         startTransition(() => {
           setAppState((currentState) => {
@@ -5866,46 +5939,6 @@ export default function App() {
             };
           });
         });
-      }
-
-      if (scope === 'all' && payload.runs?.length) {
-        const scenario = scenarioMap.get(draft.scenarioId);
-        const preferredRun =
-          payload.runs.find((run) => run.connectionId === selectedConnection?.id) ?? payload.runs[0];
-
-        if (scenario) {
-          const generatedDrafts = payload.runs.map((run) =>
-            createDraft(scenario, {
-              config: run.scenarioConfig,
-              connectionId: run.connectionId,
-              name: draft.name,
-              runId: run.id,
-            }),
-          );
-
-          setDrafts((currentDrafts) => [
-            ...generatedDrafts,
-            ...currentDrafts.filter((entry) => entry.id !== draftId),
-          ]);
-
-          const preferredDraft = generatedDrafts.find((entry) => entry.runId === preferredRun?.id);
-          setSelectedDraftId(preferredDraft?.id ?? draftId);
-        }
-      } else {
-        const nextRun = payload.runs?.[0] ?? null;
-        setDrafts((currentDrafts) =>
-          currentDrafts.map((entry) =>
-            entry.id === draftId
-              ? {
-                  ...entry,
-                  connectionId: nextRun?.connectionId ?? entry.connectionId,
-                  isCustomizing: false,
-                  runId: nextRun?.id ?? entry.runId,
-                }
-              : entry,
-          ),
-        );
-        setSelectedDraftId(draftId);
       }
     } catch (error) {
       setConnectError(error.message);
