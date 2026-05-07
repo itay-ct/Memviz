@@ -51,6 +51,15 @@ test('launch creates a RedisInsight database when no reusable entry exists', asy
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
 
+      if (url.endsWith('/api/settings')) {
+        return createMockResponse({
+          agreements: {
+            encryption: false,
+            eula: true,
+          },
+        });
+      }
+
       if (url.endsWith('/api/databases')) {
         if (!options.method) {
           return createMockResponse([]);
@@ -75,10 +84,10 @@ test('launch creates a RedisInsight database when no reusable entry exists', asy
   const launched = await service.launch(target, { databaseAlias: 'Portal Redis' });
 
   assert.equal(launched.url, '/redisinsight/ri-created/browser');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].options.method, 'POST');
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].options.method, 'POST');
 
-  const postedBody = JSON.parse(calls[1].options.body);
+  const postedBody = JSON.parse(calls[2].options.body);
   assert.deepEqual(postedBody, buildRedisInsightDatabasePayload(target, { databaseAlias: 'Portal Redis' }));
   assert.doesNotMatch(launched.url, /secret/);
 });
@@ -90,6 +99,15 @@ test('launch reuses and patches an existing RedisInsight database when one match
     publicUrl: '/redisinsight',
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
+
+      if (url.endsWith('/api/settings')) {
+        return createMockResponse({
+          agreements: {
+            encryption: false,
+            eula: true,
+          },
+        });
+      }
 
       if (url.endsWith('/api/databases') && !options.method) {
         return createMockResponse([
@@ -132,11 +150,40 @@ test('launch reuses and patches an existing RedisInsight database when one match
   const launched = await service.launch(target, { databaseAlias: 'Portal Redis' });
 
   assert.equal(launched.url, '/redisinsight/ri-existing/browser');
-  assert.equal(calls.length, 3);
-  assert.equal(calls[2].options.method, 'PATCH');
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].options.method, 'PATCH');
 
-  const patchedBody = JSON.parse(calls[2].options.body);
+  const patchedBody = JSON.parse(calls[3].options.body);
   assert.equal(patchedBody.password, 'secret');
   assert.equal(patchedBody.name, 'Portal Redis');
   assert.doesNotMatch(launched.url, /secret/);
+});
+
+test('launch fails with an actionable message when RedisInsight credential storage is not initialized', async () => {
+  const service = createRedisInsightService({
+    apiUrl: 'http://redisinsight:5540',
+    publicUrl: '/redisinsight',
+    fetchImpl: async (url) => {
+      if (url.endsWith('/api/settings')) {
+        return createMockResponse({
+          agreements: null,
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    },
+  });
+
+  await assert.rejects(
+    service.launch({
+      host: 'cache.example.com',
+      port: 6380,
+      username: 'default',
+      password: 'secret',
+      tls: true,
+      db: 0,
+      summary: 'cache.example.com:6380',
+    }, { databaseAlias: 'Cloud Redis' }),
+    /not initialized for credential storage yet/i,
+  );
 });

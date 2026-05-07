@@ -151,6 +151,18 @@ function buildRedisInsightBrowserUrl(publicUrl, databaseId) {
   return `${trimTrailingSlash(publicUrl)}/${databaseId}/browser`;
 }
 
+function buildRedisInsightApiBasePath(config) {
+  return `${config.apiPathPrefix}/api`;
+}
+
+function shouldStoreSensitiveCredentials(target) {
+  return Boolean(target?.password);
+}
+
+function hasInitializedCredentialStorage(settings) {
+  return typeof settings?.agreements?.encryption === 'boolean';
+}
+
 export function createRedisInsightService({
   apiUrl = null,
   publicUrl = null,
@@ -184,9 +196,26 @@ export function createRedisInsightService({
       }
 
       try {
+        const apiBasePath = buildRedisInsightApiBasePath(config);
+        if (shouldStoreSensitiveCredentials(target)) {
+          const settings = await requestRedisInsight(
+            fetchImpl,
+            config.apiUrl,
+            `${apiBasePath}/settings`,
+          );
+
+          if (!hasInitializedCredentialStorage(settings)) {
+            throw createRequestError(
+              'RedisInsight web is not initialized for credential storage yet. '
+              + 'Open RedisInsight once, complete the initial settings/EULA flow, '
+              + 'and then retry this connection.',
+            );
+          }
+        }
+
         const payload = buildRedisInsightDatabasePayload(target, { databaseAlias });
-        const apiBasePath = `${config.apiPathPrefix}/api/databases`;
-        const databases = await requestRedisInsight(fetchImpl, config.apiUrl, apiBasePath);
+        const databaseApiPath = `${apiBasePath}/databases`;
+        const databases = await requestRedisInsight(fetchImpl, config.apiUrl, databaseApiPath);
         const existingDatabase = Array.isArray(databases)
           ? databases.find((database) => databaseMatchesTarget(database, target))
           : null;
@@ -198,16 +227,16 @@ export function createRedisInsightService({
             const current = await requestRedisInsight(
               fetchImpl,
               config.apiUrl,
-              `${apiBasePath}/${databaseId}`,
+              `${databaseApiPath}/${databaseId}`,
             );
             databaseId = current?.id || databaseId;
-            await requestRedisInsight(fetchImpl, config.apiUrl, `${apiBasePath}/${databaseId}`, {
+            await requestRedisInsight(fetchImpl, config.apiUrl, `${databaseApiPath}/${databaseId}`, {
               method: 'PATCH',
               body: JSON.stringify(payload),
             });
           } catch (error) {
             if (error.kind === 'redisinsight') {
-              const created = await requestRedisInsight(fetchImpl, config.apiUrl, apiBasePath, {
+              const created = await requestRedisInsight(fetchImpl, config.apiUrl, databaseApiPath, {
                 method: 'POST',
                 body: JSON.stringify(payload),
               });
@@ -222,7 +251,7 @@ export function createRedisInsightService({
           };
         }
 
-        const created = await requestRedisInsight(fetchImpl, config.apiUrl, apiBasePath, {
+        const created = await requestRedisInsight(fetchImpl, config.apiUrl, databaseApiPath, {
           method: 'POST',
           body: JSON.stringify(payload),
         });
