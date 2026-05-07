@@ -11,7 +11,9 @@ One command:
 npm run setup
 ```
 
-memviz serves the app on [http://127.0.0.1:3000](http://127.0.0.1:3000).
+`npm run setup` installs dependencies, builds the frontend, starts the production server, and performs the Memtier runtime check on first launch. If a compatible local `memtier_benchmark` is not available, memviz may pull the Docker fallback image before the app becomes ready.
+
+memviz serves the app on [http://127.0.0.1:3000](http://127.0.0.1:3000). Keep that terminal open while you use the app, and stop it with `Ctrl+C` when you are done.
 
 If you prefer the explicit two-step flow:
 
@@ -20,6 +22,22 @@ npm install
 npm run build
 npm run start
 ```
+
+## Development
+
+For iterative development:
+
+```bash
+npm run dev
+```
+
+That command starts the Node server watcher and the Vite frontend together so you can work on the app without rebuilding between edits.
+
+Other useful commands:
+
+- `npm run test` runs the Node test suite.
+- `npm run build` creates the production frontend bundle in `dist/`.
+- `npm run start` serves the production build with the Express backend.
 
 ## Memtier dependency
 
@@ -51,6 +69,30 @@ Official Memtier repository:
 
 Local Redis without auth works out of the box at `127.0.0.1:6379`.
 
+## Configuration
+
+memviz is usable with no environment variables, but a few settings are worth documenting when you want a different default target or host layout.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port for the memviz web app and API server. |
+| `MEMVIZ_DEFAULT_REDIS_HOST` | `127.0.0.1` | Default Redis host shown and used for the initial connection bootstrap. |
+| `MEMVIZ_DEFAULT_REDIS_PORT` | `6379` | Default Redis port paired with `MEMVIZ_DEFAULT_REDIS_HOST`. |
+| `MEMVIZ_STATSD_HOST` | `127.0.0.1` | Host the internal StatsD receiver binds to for live benchmark metrics. |
+| `MEMVIZ_STATSD_PORT` | `8125` | UDP port the internal StatsD receiver listens on. |
+
+Examples:
+
+```bash
+PORT=4000 npm run start
+MEMVIZ_DEFAULT_REDIS_HOST=redis MEMVIZ_DEFAULT_REDIS_PORT=6379 npm run start
+```
+
+Redis target examples you can use in the UI:
+
+- `127.0.0.1:6379`
+- `redis://default:secret@cache.example.com:6379/0`
+
 ## PS Portal Packaging
 
 This repo includes a first-pass PS Portal packaging flow for a self-contained demo image:
@@ -73,84 +115,12 @@ For the first image, use these defaults in the portal flow:
 
 ## Presets
 
-A preset is a single YAML file that groups together a workflow's built-in benchmark tests and its built-in dataset presets.
+A preset is a single YAML file that groups together a workflow's built-in benchmark tests and dataset presets. Presets are the easiest way to let more people tailor memviz to their own Redis workflow without recompiling the app or shipping a new release.
 
-memviz loads every `*.preset.yaml` file from the project root when it starts. The topbar preset picker lets you switch between them, and you can also open a preset directly by URL with a query string such as:
+memviz loads every `*.preset.yaml` file from the project root when it starts. The topbar preset picker lets you switch between them, you can import one in the UI with `Load preset file…`, and you can also open a preset directly by URL with a query string such as:
 
 ```text
 http://127.0.0.1:3000/?preset=search
 ```
 
-### What goes in a preset
-
-Each preset file can contain:
-
-- `name`: the stable preset id used by memviz and the `?preset=` URL parameter.
-- `label`: the display name shown in the UI.
-- `tests`: the built-in tests shown in the test picker for that preset.
-- `dataset_presets`: the built-in dataset presets shown in the dataset load dialog for that preset.
-
-### Creating a preset
-
-1. Create a new file in the project root with the suffix `.preset.yaml`.
-2. Give it a unique `name` and `label`.
-3. Add one or more `tests`.
-4. Add any `dataset_presets` that should ship with that workflow.
-5. Restart memviz, or use the in-app "Load preset file…" option to import it from your browser.
-
-Example:
-
-```yaml
-name: cache-lab
-label: Cache Lab
-
-tests:
-  - id: get-heavy
-    name: GET Heavy
-    kind: workload
-    defaults:
-      clients: 40
-      threads: 4
-      testTime: 15
-      limitMode: time
-      requestCount: 150000
-      rateLimitEnabled: false
-      rateLimit: 20000
-      pipeline: 1
-      keyPrefix: cache:
-      setRatio: 1
-      getRatio: 20
-      dataSize: 64
-
-dataset_presets:
-  - id: cache-json
-    name: Cache JSON
-    record_count: 50000
-    total_size: approx. 60 MB raw
-    dataset_yaml: |
-      name: cache-json
-      records: 50000
-      seed: 42
-      generator:
-        type: faker
-        entity: record
-        fields:
-          id:
-            type: int
-            unique: true
-          title:
-            type: text
-    storage_yaml: |
-      type: json
-      key_prefix: "cache:"
-      write_mode: pipeline
-      pipeline_size: 1000
-      index:
-        enabled: false
-```
-
-### Notes
-
-- Preset names must be unique across all preset files.
-- Dataset preset ids must be unique within the preset file that defines them.
-- Tests only appear inside the preset they belong to, which keeps different workflows separate and easier to understand.
+The full authoring guide, validation notes, and example preset live in [PRESETS.md](./PRESETS.md).
