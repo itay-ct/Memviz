@@ -7,12 +7,15 @@ services:
     container_name: memviz
     depends_on:
       - redis
+      - redisinsight
     restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: "3000"
       MEMVIZ_DEFAULT_REDIS_HOST: redis
       MEMVIZ_DEFAULT_REDIS_PORT: "6379"
+      REDISINSIGHT_API_URL: http://redisinsight:5540
+      REDISINSIGHT_PUBLIC_URL: /redisinsight
     ports:
       - "3000:3000"
 
@@ -21,3 +24,15 @@ services:
     container_name: memviz-redis
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: memviz-redisinsight
+    restart: unless-stopped
+    environment:
+      RI_PROXY_PATH: redisinsight
+    volumes:
+      - redisinsight-data:/data
+
+volumes:
+  redisinsight-data:

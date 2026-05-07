@@ -120,16 +120,21 @@ const EMPTY_APP_STATE = {
   presetOptions: [],
   selectedPresetName: '',
   selectedPresetLabel: '',
+  canOpenRedisInsight: true,
 };
 
 const EMPTY_META = {
-  appVersion: '1.2.1',
+  appVersion: '1.3.0',
   appPort: 3000,
   appUrl: 'http://127.0.0.1:3000',
   memtier: {
     version: null,
     minimumVersion: '2.3.0',
     repoUrl: 'https://github.com/RedisLabs/memtier_benchmark',
+  },
+  redisInsight: {
+    mode: 'desktop',
+    publicUrl: null,
   },
 };
 
@@ -187,6 +192,7 @@ function reduceSocketMessage(state, message) {
       presetOptions: message.state.presetOptions ?? [],
       selectedPresetName: message.state.selectedPresetName ?? '',
       selectedPresetLabel: message.state.selectedPresetLabel ?? '',
+      canOpenRedisInsight: message.state.canOpenRedisInsight ?? true,
     };
   }
 
@@ -2567,6 +2573,8 @@ function ConnectionCard({
   disconnectDisabled,
   isSelected,
   loadDisabled,
+  redisInsightActionTitle,
+  redisInsightDisabled,
   onLoadDataset,
   onDisconnect,
   onOpenRedisInsight,
@@ -2756,10 +2764,12 @@ function ConnectionCard({
             </button>
             <button
               className="connection-menu-item"
+              disabled={redisInsightDisabled}
               onClick={() => {
                 setShowMenu(false);
-                onOpenRedisInsight(connection.redisInsightUrl);
+                onOpenRedisInsight(connection.id);
               }}
+              title={redisInsightActionTitle}
               type="button"
             >
               View in Redis Insight
@@ -2814,6 +2824,8 @@ function TopBar({
   onSelectConnection,
   presetOptions,
   presetSelectionDisabled,
+  redisInsightActionTitle,
+  redisInsightDisabled,
   selectedConnectionId,
   selectedPresetName,
   setup,
@@ -2884,6 +2896,8 @@ function TopBar({
             isSelected={connection.id === selectedConnectionId}
             key={connection.id}
             loadDisabled={hasRunningRuns || hasActiveLoads}
+            redisInsightActionTitle={redisInsightActionTitle}
+            redisInsightDisabled={redisInsightDisabled}
             onLoadDataset={onLoadDataset}
             onDisconnect={onDisconnect}
             onOpenRedisInsight={onOpenRedisInsight}
@@ -5117,6 +5131,7 @@ export default function App() {
   const [runPendingDraftId, setRunPendingDraftId] = useState(null);
   const [connectError, setConnectError] = useState('');
   const [isConnectionFormVisible, setIsConnectionFormVisible] = useState(false);
+  const [redisInsightLaunchPendingId, setRedisInsightLaunchPendingId] = useState(null);
   const [datasetLoadContext, setDatasetLoadContext] = useState(null);
   const [missingIndexPrompt, setMissingIndexPrompt] = useState(null);
   const [presetLoadResult, setPresetLoadResult] = useState(null);
@@ -5447,6 +5462,10 @@ export default function App() {
               minimumVersion: meta.memtier?.minimumVersion ?? EMPTY_META.memtier.minimumVersion,
               repoUrl: meta.memtier?.repoUrl ?? EMPTY_META.memtier.repoUrl,
             },
+            redisInsight: {
+              mode: meta.redisInsight?.mode ?? EMPTY_META.redisInsight.mode,
+              publicUrl: meta.redisInsight?.publicUrl ?? EMPTY_META.redisInsight.publicUrl,
+            },
           });
         });
       })
@@ -5639,12 +5658,39 @@ export default function App() {
     }
   }
 
-  function handleOpenRedisInsight(redisInsightUrl) {
-    if (!redisInsightUrl) {
+  async function handleOpenRedisInsight(connectionId) {
+    if (!connectionId) {
       return;
     }
 
-    window.location.assign(redisInsightUrl);
+    setConnectError('');
+    setRedisInsightLaunchPendingId(connectionId);
+
+    try {
+      const response = await fetch(`/api/connections/${connectionId}/redisinsight/launch`, {
+        method: 'POST',
+      });
+      const payload = await readJsonResponse(response, 'Could not open Redis Insight.');
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Could not open Redis Insight.');
+      }
+
+      const launchedUrl = String(payload.url ?? '').trim();
+      if (!launchedUrl) {
+        throw new Error('Redis Insight did not return a launch URL.');
+      }
+
+      if (launchedUrl.startsWith('redisinsight://')) {
+        window.location.assign(launchedUrl);
+        return;
+      }
+
+      window.open(launchedUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setConnectError(error.message);
+    } finally {
+      setRedisInsightLaunchPendingId(null);
+    }
   }
 
   function handlePrepareAddConnection() {
@@ -6187,6 +6233,14 @@ export default function App() {
         onSelectConnection={handleSelectConnection}
         presetOptions={appState.presetOptions}
         presetSelectionDisabled={hasRunningRuns || hasActiveLoads}
+        redisInsightActionTitle={
+          appMeta.redisInsight.mode === 'web'
+            ? 'Opens Redis Insight web in a new tab. Remote deployments should use this path.'
+            : 'Opens the local Redis Insight desktop app if it is installed.'
+        }
+        redisInsightDisabled={
+          !appState.canOpenRedisInsight || redisInsightLaunchPendingId !== null
+        }
         selectedConnectionId={selectedConnection?.id ?? null}
         selectedPresetName={appState.selectedPresetName}
         setup={setupState}

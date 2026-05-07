@@ -80,12 +80,15 @@ memviz is usable with no environment variables, but a few settings are worth doc
 | `MEMVIZ_DEFAULT_REDIS_PORT` | `6379` | Default Redis port paired with `MEMVIZ_DEFAULT_REDIS_HOST`. |
 | `MEMVIZ_STATSD_HOST` | `127.0.0.1` | Host the internal StatsD receiver binds to for live benchmark metrics. |
 | `MEMVIZ_STATSD_PORT` | `8125` | UDP port the internal StatsD receiver listens on. |
+| `REDISINSIGHT_API_URL` | unset | Internal RedisInsight base URL used for server-side database provisioning, for example `http://redisinsight:5540`. |
+| `REDISINSIGHT_PUBLIC_URL` | unset | User-facing RedisInsight base URL or same-origin subpath, for example `/redisinsight` or `https://tools.example.com/redisinsight`. |
 
 Examples:
 
 ```bash
 PORT=4000 npm run start
 MEMVIZ_DEFAULT_REDIS_HOST=redis MEMVIZ_DEFAULT_REDIS_PORT=6379 npm run start
+REDISINSIGHT_API_URL=http://redisinsight:5540 REDISINSIGHT_PUBLIC_URL=/redisinsight npm run start
 ```
 
 Redis target examples you can use in the UI:
@@ -98,12 +101,13 @@ Redis target examples you can use in the UI:
 This repo includes a first-pass PS Portal packaging flow for a self-contained demo image:
 
 - `docker-compose.yml` starts `memviz` and a local Redis together.
+- `docker-compose.yml` also starts RedisInsight and exposes it through Memviz at `/redisinsight/`.
 - `Dockerfile` builds the production Memviz container and installs `memtier_benchmark`.
 - `build.sh` prepares a Linux VM image with Docker, Node.js 20+, and a host copy of `memtier_benchmark`.
 - `start.sh` boots the compose stack on VM startup.
 - `.github/workflows/trigger-build.yaml` triggers the centralized PS Portal image builder.
 
-The compose stack exposes only Memviz on port `3000`. Inside the portal image, Memviz uses environment overrides so its default Redis target points at the bundled `redis` service.
+The compose stack exposes only Memviz on port `3000`. RedisInsight stays internal and is reverse-proxied through Memviz at `/redisinsight/`. Inside the portal image, Memviz uses environment overrides so its default Redis target points at the bundled `redis` service and its RedisInsight provisioning points at the bundled `redisinsight` service.
 
 For the first image, use these defaults in the portal flow:
 

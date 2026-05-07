@@ -45,6 +45,7 @@ import {
   updateConnectionRtt,
 } from './store.js';
 import {
+  assertRuntimeSupportsScenario,
   buildMemtierCommand,
   launchMemtier,
   measureConnectionLatency,
@@ -54,24 +55,31 @@ import {
   STATSD_HOST,
   STATSD_PORT,
 } from './memtier.js';
+import {
+  createRedisInsightProxyHandler,
+  createRedisInsightService,
+  getRedisInsightConfig,
+} from './redisinsight.js';
 import { createSetupManager } from './setup-manager.js';
 import { createStatsdReceiver } from './statsd.js';
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const redisInsightProxyWss = new WebSocketServer({ noServer: true });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(projectRoot, 'dist');
 const REDIS_CONNECT_TIMEOUT_MS = 3000;
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const APP_PORT = Number(process.env.PORT ?? 3000);
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
 const MAX_CONNECTIONS = 3;
 const DEFAULT_REDIS_HOST = process.env.MEMVIZ_DEFAULT_REDIS_HOST ?? '127.0.0.1';
 const DEFAULT_REDIS_PORT = process.env.MEMVIZ_DEFAULT_REDIS_PORT ?? '6379';
+const REDISINSIGHT_CONFIG = getRedisInsightConfig(process.env);
 const DEFAULT_TARGET_INPUT = {
   hostOrUrl: DEFAULT_REDIS_HOST,
   port: DEFAULT_REDIS_PORT,
@@ -93,6 +101,29 @@ const FATAL_MEMTIER_PATTERNS = [
       `Redis rejected the benchmark command syntax: ${line}. This usually means the query syntax or index field type does not match the benchmark command.`,
   },
 ];
+
+const redisInsightService = createRedisInsightService({
+  apiUrl: REDISINSIGHT_CONFIG.apiUrl,
+  publicUrl: REDISINSIGHT_CONFIG.publicUrl,
+});
+const redisInsightProxyHandler = createRedisInsightProxyHandler({
+  apiUrl: REDISINSIGHT_CONFIG.apiUrl,
+  publicPath: REDISINSIGHT_CONFIG.publicPath,
+});
+
+if (redisInsightProxyHandler && REDISINSIGHT_CONFIG.publicPath) {
+  app.use((req, res, next) => {
+    if (
+      req.path === REDISINSIGHT_CONFIG.publicPath ||
+      req.path.startsWith(`${REDISINSIGHT_CONFIG.publicPath}/`)
+    ) {
+      redisInsightProxyHandler(req, res);
+      return;
+    }
+
+    next();
+  });
+}
 
 app.use(express.json());
 
@@ -533,6 +564,7 @@ function toPublicState() {
   return {
     ...getStateSnapshot(),
     ...getPresetClientState(),
+    canOpenRedisInsight: true,
   };
 }
 
@@ -676,6 +708,10 @@ app.get('/api/meta', async (_req, res) => {
       minimumVersion: MIN_MEMTIER_VERSION,
       repoUrl: MEMTIER_REPO_URL,
     },
+    redisInsight: {
+      mode: redisInsightService.isWebConfigured() ? 'web' : 'desktop',
+      publicUrl: REDISINSIGHT_CONFIG.publicUrl,
+    },
   });
 });
 
@@ -782,6 +818,38 @@ app.patch('/api/connections/:id', (req, res) => {
   const state = toPublicState();
   broadcastState();
   res.json({ success: true, connection, state });
+});
+
+app.post('/api/connections/:id/redisinsight/launch', async (req, res) => {
+  const connection = getConnection(req.params.id);
+
+  if (!connection) {
+    res.status(404).json({
+      success: false,
+      error: 'Connection not found.',
+    });
+    return;
+  }
+
+  try {
+    const launched = await redisInsightService.launch(connection.target, {
+      databaseAlias: connection.name,
+    });
+
+    res.json({
+      success: true,
+      url: launched.url,
+    });
+  } catch (error) {
+    const message = error.kind === 'redisinsight'
+      ? error.message
+      : `Could not launch RedisInsight. ${error.message}`;
+
+    res.status(502).json({
+      success: false,
+      error: message,
+    });
+  }
 });
 
 app.post('/api/disconnect', (req, res) => {
@@ -950,6 +1018,16 @@ app.post('/api/run', async (req, res) => {
     runtime = await resolveMemtierRuntime();
   } catch (error) {
     res.status(503).json({
+      success: false,
+      error: error.message,
+    });
+    return;
+  }
+
+  try {
+    await assertRuntimeSupportsScenario(runtime, scenario);
+  } catch (error) {
+    res.status(409).json({
       success: false,
       error: error.message,
     });
@@ -1183,6 +1261,74 @@ wss.on('connection', (socket) => {
 });
 
 server.on('upgrade', (request, socket, head) => {
+  if (
+    REDISINSIGHT_CONFIG.apiUrl &&
+    REDISINSIGHT_CONFIG.publicPath &&
+    request.url?.startsWith(`${REDISINSIGHT_CONFIG.publicPath}/socket.io`)
+  ) {
+    const targetUrl = new URL(REDISINSIGHT_CONFIG.apiUrl);
+    const upstreamProtocol = targetUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const upstreamUrl = `${upstreamProtocol}//${targetUrl.host}${request.url}`;
+    const upstreamSocket = new WebSocket(upstreamUrl, {
+      headers: {
+        ...request.headers,
+        host: targetUrl.host,
+      },
+    });
+
+    redisInsightProxyWss.handleUpgrade(request, socket, head, (clientSocket) => {
+      const pendingMessages = [];
+
+      clientSocket.on('message', (data, isBinary) => {
+        if (upstreamSocket.readyState === WebSocket.OPEN) {
+          upstreamSocket.send(data, { binary: isBinary });
+          return;
+        }
+
+        pendingMessages.push({ data, isBinary });
+      });
+
+      clientSocket.on('close', (code, reason) => {
+        if (upstreamSocket.readyState === WebSocket.OPEN) {
+          upstreamSocket.close(code, reason);
+        }
+      });
+
+      clientSocket.on('error', () => {
+        if (upstreamSocket.readyState === WebSocket.OPEN) {
+          upstreamSocket.close();
+        }
+      });
+
+      upstreamSocket.on('open', () => {
+        while (pendingMessages.length) {
+          const entry = pendingMessages.shift();
+          upstreamSocket.send(entry.data, { binary: entry.isBinary });
+        }
+      });
+
+      upstreamSocket.on('message', (data, isBinary) => {
+        if (clientSocket.readyState === WebSocket.OPEN) {
+          clientSocket.send(data, { binary: isBinary });
+        }
+      });
+
+      upstreamSocket.on('close', (code, reason) => {
+        if (clientSocket.readyState === WebSocket.OPEN) {
+          clientSocket.close(code, reason.toString());
+        }
+      });
+
+      upstreamSocket.on('error', () => {
+        if (clientSocket.readyState === WebSocket.OPEN) {
+          clientSocket.close();
+        }
+      });
+    });
+
+    return;
+  }
+
   if (request.url !== '/ws') {
     socket.destroy();
     return;
