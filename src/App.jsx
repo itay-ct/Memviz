@@ -2223,6 +2223,51 @@ function ConnectionFormPanel({
   );
 }
 
+function ConnectionModal({
+  connectDisabled,
+  connectPending,
+  formError,
+  formState,
+  onClose,
+  onConnect,
+  onFormChange,
+  onHostOrUrlPaste,
+  open,
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim connection-modal-scrim" onClick={onClose}>
+      <section
+        aria-labelledby="connection-modal-title"
+        aria-modal="true"
+        className="connection-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="connection-modal-header">
+          <div>
+            <p className="eyebrow">Database</p>
+            <h2 id="connection-modal-title">Add connection</h2>
+          </div>
+        </div>
+        <ConnectionFormPanel
+          connectDisabled={connectDisabled}
+          connectPending={connectPending}
+          formError={formError}
+          formState={formState}
+          onClose={onClose}
+          onConnect={onConnect}
+          onFormChange={onFormChange}
+          onHostOrUrlPaste={onHostOrUrlPaste}
+        />
+      </section>
+    </div>
+  );
+}
+
 function DatasetLoadModal({
   allConnections,
   datasetPresets,
@@ -3043,12 +3088,14 @@ function TopBar({
     setup.status === 'error' ? 'Setup needs attention' : !setupReady ? 'Preparing memtier' : null;
   const canAddConnection =
     setupReady && connections.length < 3 && !hasRunningRuns && !hasActiveLoads;
-  const showForm = !connections.length || showAddConnectionForm;
+  const showInlineForm = !connections.length;
+  const showAddConnectionModal = connections.length > 0 && showAddConnectionForm;
+  const formVisible = showInlineForm || showAddConnectionModal;
   const activePresetName = selectedPresetName || presetOptions[0]?.name || '';
 
   useEffect(() => {
     if (!connections.length) {
-      setShowAddConnectionForm(true);
+      setShowAddConnectionForm(false);
       return;
     }
 
@@ -3056,99 +3103,105 @@ function TopBar({
   }, [connections.length]);
 
   useEffect(() => {
-    onConnectionFormVisibilityChange?.(showForm);
-  }, [onConnectionFormVisibilityChange, showForm]);
+    onConnectionFormVisibilityChange?.(formVisible);
+  }, [formVisible, onConnectionFormVisibilityChange]);
 
   return (
-    <header
-      className={`topbar ${!connections.length ? 'topbar-disconnected' : ''} ${showForm ? 'topbar-form-open' : ''}`}
-    >
-      <div className="topbar-brand">
-        <div className="topbar-brand-mark">
-          <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
+    <>
+      <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
+        <div className="topbar-brand">
+          <div className="topbar-brand-mark">
+            <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
+          </div>
+          <div className="topbar-brand-copy">
+            <p className="eyebrow">memviz</p>
+            <strong>Redis benchmark workspace</strong>
+            {setupNote ? (
+              <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
+            ) : null}
+            {presetOptions.length ? (
+              <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
+                <span className="topbar-preset-label">Preset</span>
+                <select
+                  id="topbar-preset-select"
+                  className="topbar-preset-select"
+                  disabled={presetSelectionDisabled}
+                  onChange={(event) => onPresetChange(event.target.value)}
+                  value={activePresetName}
+                >
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.label}
+                    </option>
+                  ))}
+                  <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
+                </select>
+                <PresetInfoTooltip />
+              </label>
+            ) : null}
+          </div>
         </div>
-        <div className="topbar-brand-copy">
-          <p className="eyebrow">memviz</p>
-          <strong>Redis benchmark workspace</strong>
-          {setupNote ? (
-            <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
-          ) : null}
-          {presetOptions.length ? (
-            <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
-              <span className="topbar-preset-label">Preset</span>
-              <select
-                id="topbar-preset-select"
-                className="topbar-preset-select"
-                disabled={presetSelectionDisabled}
-                onChange={(event) => onPresetChange(event.target.value)}
-                value={activePresetName}
-              >
-                {presetOptions.map((preset) => (
-                  <option key={preset.name} value={preset.name}>
-                    {preset.label}
-                  </option>
-                ))}
-                <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
-              </select>
-              <PresetInfoTooltip />
-            </label>
+
+        <div className="topbar-connections">
+          {connections.map((connection) => (
+            <ConnectionCard
+              connection={connection}
+              disconnectDisabled={hasRunningRuns || hasActiveLoads}
+              isSelected={connection.id === selectedConnectionId}
+              key={connection.id}
+              loadDisabled={hasRunningRuns || hasActiveLoads}
+              redisInsightActionTitle={redisInsightActionTitle}
+              redisInsightDisabled={redisInsightDisabled}
+              onLoadDataset={onLoadDataset}
+              onDisconnect={onDisconnect}
+              onOpenRedisInsight={onOpenRedisInsight}
+              onRename={onRenameConnection}
+              onSelect={onSelectConnection}
+            />
+          ))}
+
+          {showInlineForm ? (
+            <ConnectionFormPanel
+              connectDisabled={connectDisabled}
+              connectPending={connectPending}
+              formError={connectError || validationError}
+              formState={formState}
+              onConnect={onConnect}
+              onFormChange={onFormChange}
+              onHostOrUrlPaste={onHostOrUrlPaste}
+            />
           ) : null}
         </div>
-      </div>
 
-      <div className="topbar-connections">
-        {connections.map((connection) => (
-          <ConnectionCard
-            connection={connection}
-            disconnectDisabled={hasRunningRuns || hasActiveLoads}
-            isSelected={connection.id === selectedConnectionId}
-            key={connection.id}
-            loadDisabled={hasRunningRuns || hasActiveLoads}
-            redisInsightActionTitle={redisInsightActionTitle}
-            redisInsightDisabled={redisInsightDisabled}
-            onLoadDataset={onLoadDataset}
-            onDisconnect={onDisconnect}
-            onOpenRedisInsight={onOpenRedisInsight}
-            onRename={onRenameConnection}
-            onSelect={onSelectConnection}
-          />
-        ))}
-
-        {showForm ? (
-          <ConnectionFormPanel
-            connectDisabled={connectDisabled}
-            connectPending={connectPending}
-            formState={formState}
-            formError={connectError || validationError}
-            onConnect={onConnect}
-            onClose={connections.length ? () => setShowAddConnectionForm(false) : null}
-            onFormChange={onFormChange}
-            onHostOrUrlPaste={onHostOrUrlPaste}
-          />
+        {connections.length ? (
+          <div className="topbar-trailing">
+            <button
+              className="ghost-button"
+              disabled={!canAddConnection}
+              onClick={() => {
+                onPrepareAddConnection();
+                setShowAddConnectionForm(true);
+              }}
+              type="button"
+            >
+              Add connection
+            </button>
+          </div>
         ) : null}
-      </div>
+      </header>
 
-      {connections.length && !showForm ? (
-        <div className="topbar-trailing">
-          <button
-            className="ghost-button"
-            disabled={!canAddConnection}
-            onClick={() =>
-              setShowAddConnectionForm((current) => {
-                const next = !current;
-                if (next) {
-                  onPrepareAddConnection();
-                }
-                return next;
-              })
-            }
-            type="button"
-          >
-            {showForm ? 'Close' : 'Add connection'}
-          </button>
-        </div>
-      ) : null}
-    </header>
+      <ConnectionModal
+        connectDisabled={connectDisabled}
+        connectPending={connectPending}
+        formError={connectError || validationError}
+        formState={formState}
+        onClose={() => setShowAddConnectionForm(false)}
+        onConnect={onConnect}
+        onFormChange={onFormChange}
+        onHostOrUrlPaste={onHostOrUrlPaste}
+        open={showAddConnectionModal}
+      />
+    </>
   );
 }
 

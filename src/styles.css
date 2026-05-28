@@ -367,20 +367,6 @@ select:disabled {
   grid-template-columns: auto minmax(0, 1fr);
 }
 
-.topbar-form-open {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.topbar-form-open .topbar-connections {
-  grid-column: 1 / -1;
-  pointer-events: none;
-}
-
-.topbar-form-open .connection-card,
-.topbar-form-open .topbar-connect-form-shell {
-  pointer-events: auto;
-}
-
 .topbar-brand {
   display: flex;
   align-items: center;
@@ -953,6 +939,54 @@ select:disabled {
   padding: 1.5rem;
   background: rgba(9, 26, 35, 0.32);
   backdrop-filter: blur(10px);
+}
+
+.connection-modal {
+  width: min(680px, 100%);
+  max-height: min(86vh, 760px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(9, 26, 35, 0.08);
+  box-shadow: 0 30px 70px rgba(9, 26, 35, 0.18);
+  overflow: hidden;
+}
+
+.connection-modal-header {
+  padding: 1.2rem 1.3rem;
+  border-bottom: 1px solid rgba(9, 26, 35, 0.08);
+}
+
+.connection-modal-header h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1.2rem;
+}
+
+.connection-modal .topbar-connect-form-shell {
+  display: block;
+  min-height: 0;
+  padding: 1.25rem 1.3rem;
+}
+
+.connection-modal .topbar-connect-form {
+  grid-template-columns: 1fr;
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.connection-modal .topbar-source-selects,
+.connection-modal .topbar-connect-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.connection-modal .topbar-close-form-button {
+  min-height: 2.8rem;
 }
 
 .dataset-modal {
@@ -3475,6 +3509,11 @@ select:disabled {
 
   .topbar-source-selects,
   .topbar-connect-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .connection-modal .topbar-source-selects,
+  .connection-modal .topbar-connect-actions {
     grid-template-columns: 1fr;
   }
 
