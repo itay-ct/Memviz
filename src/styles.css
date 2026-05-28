@@ -237,6 +237,18 @@ code {
   transform: translateY(-1px);
 }
 
+.database-source-select.is-placeholder {
+  color: rgba(22, 51, 65, 0.42);
+}
+
+.database-source-select option {
+  color: var(--text);
+}
+
+.database-source-select option:disabled {
+  color: rgba(22, 51, 65, 0.42);
+}
+
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

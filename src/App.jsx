@@ -41,8 +41,6 @@ import {
 import {
   DATABASE_ENGINE_OPTIONS,
   DATABASE_SERVICE_OPTIONS,
-  DEFAULT_DATABASE_ENGINE,
-  DEFAULT_DATABASE_SERVICE,
   getDatabaseEngineLabel,
   getDatabaseServiceLabel,
   normalizeDatabaseSource,
@@ -159,8 +157,8 @@ const DEFAULT_FORM = {
   port: '6379',
   username: 'default',
   password: '',
-  engine: DEFAULT_DATABASE_ENGINE,
-  service: DEFAULT_DATABASE_SERVICE,
+  engine: '',
+  service: '',
 };
 
 const BLANK_CONNECTION_FORM = {
@@ -168,8 +166,8 @@ const BLANK_CONNECTION_FORM = {
   port: '',
   username: '',
   password: '',
-  engine: DEFAULT_DATABASE_ENGINE,
-  service: DEFAULT_DATABASE_SERVICE,
+  engine: '',
+  service: '',
 };
 
 const EMPTY_APP_STATE = {
@@ -334,19 +332,33 @@ function validateConnectionForm(formState) {
       if (!parsedUrl.hostname) {
         return 'Redis URL must include a host.';
       }
-
-      return '';
     } catch {
       return 'Enter a valid Redis URL.';
     }
+  } else {
+    const port = Number(formState.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return 'Enter a valid Redis port.';
+    }
   }
 
-  const port = Number(formState.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return 'Enter a valid Redis port.';
+  if (!isValidDatabaseEngineValue(formState.engine)) {
+    return 'Select an engine.';
+  }
+
+  if (!isValidDatabaseServiceValue(formState.service)) {
+    return 'Select a provider.';
   }
 
   return '';
+}
+
+function isValidDatabaseEngineValue(value) {
+  return DATABASE_ENGINE_OPTIONS.some((option) => option.value === value);
+}
+
+function isValidDatabaseServiceValue(value) {
+  return DATABASE_SERVICE_OPTIONS.some((option) => option.value === value);
 }
 
 function isValidRedisPortValue(value) {
@@ -383,7 +395,9 @@ function hasConnectionFormInput(formState) {
     formState.hostOrUrl.trim() ||
       formState.port.trim() ||
       formState.username.trim() ||
-      formState.password.trim(),
+      formState.password.trim() ||
+      formState.engine ||
+      formState.service,
   );
 }
 
@@ -1975,11 +1989,14 @@ function DatabaseSourceSelects({ className = '', compact = false, formState, onF
   const engineSelect = (
     <select
       aria-label={compact ? 'Engine' : undefined}
-      className="database-source-select"
+      className={`database-source-select ${formState.engine ? '' : 'is-placeholder'}`.trim()}
       name="engine"
       onChange={onFormChange}
-      value={formState.engine ?? DEFAULT_DATABASE_ENGINE}
+      value={formState.engine ?? ''}
     >
+      <option disabled value="">
+        Select Engine
+      </option>
       {DATABASE_ENGINE_OPTIONS.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
@@ -1990,11 +2007,14 @@ function DatabaseSourceSelects({ className = '', compact = false, formState, onF
   const serviceSelect = (
     <select
       aria-label={compact ? 'Service' : undefined}
-      className="database-source-select"
+      className={`database-source-select ${formState.service ? '' : 'is-placeholder'}`.trim()}
       name="service"
       onChange={onFormChange}
-      value={formState.service ?? DEFAULT_DATABASE_SERVICE}
+      value={formState.service ?? ''}
     >
+      <option disabled value="">
+        Select Provider
+      </option>
       {DATABASE_SERVICE_OPTIONS.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
