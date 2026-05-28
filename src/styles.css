@@ -711,8 +711,8 @@ select:disabled {
 }
 
 .database-source-badge-valkey {
-  border-color: rgba(32, 128, 104, 0.2);
-  background: rgba(32, 128, 104, 0.08);
+  border-color: rgba(102, 126, 255, 0.22);
+  background: rgba(102, 126, 255, 0.08);
 }
 
 .source-engine-icon {
@@ -721,27 +721,37 @@ select:disabled {
   flex: none;
 }
 
-.source-engine-icon-redis rect {
+.source-engine-icon-redis {
+  color: #e32922;
+}
+
+.redis-stack-layer {
   fill: currentColor;
 }
 
-.source-engine-icon-redis path {
-  fill: none;
-  stroke: #ffffff;
-  stroke-linecap: round;
-  stroke-width: 0.9;
+.redis-stack-bottom,
+.redis-stack-middle {
+  fill: #b9281f;
 }
 
-.source-engine-icon-valkey path:first-child {
+.redis-stack-cutout {
+  fill: #ffffff;
+}
+
+.redis-stack-shadow {
+  fill: rgba(96, 18, 12, 0.52);
+}
+
+.source-engine-icon-valkey {
+  color: #667eff;
+}
+
+.valkey-mark {
   fill: currentColor;
 }
 
-.source-engine-icon-valkey path:last-child {
-  fill: none;
-  stroke: #ffffff;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.1;
+.valkey-cutout {
+  fill: #ffffff;
 }
 
 .connection-source-badge {

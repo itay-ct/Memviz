@@ -132,13 +132,16 @@ function TrashIcon() {
   );
 }
 
-function RedisShardIcon() {
+function RedisStackIcon() {
   return (
     <svg aria-hidden="true" className="source-engine-icon source-engine-icon-redis" viewBox="0 0 20 20">
-      <rect height="5.8" rx="1.4" width="12.4" x="3.8" y="3" />
-      <rect height="5.8" rx="1.4" width="12.4" x="3.8" y="7.1" />
-      <rect height="5.8" rx="1.4" width="12.4" x="3.8" y="11.2" />
-      <path d="M6.2 5.9h4.7M6.2 10h4.7M6.2 14.1h4.7" />
+      <path className="redis-stack-layer redis-stack-bottom" d="M2 13.1 10 9.25 18 13.1 10 17.35Z" />
+      <path className="redis-stack-layer redis-stack-middle" d="M2 10.15 10 6.3 18 10.15 10 14.4Z" />
+      <path className="redis-stack-layer redis-stack-top" d="M2 7.1 10 3.15 18 7.1 10 11.35Z" />
+      <ellipse className="redis-stack-cutout" cx="6.9" cy="7" rx="2.2" ry="0.86" />
+      <path className="redis-stack-cutout" d="M10.6 4.5 11.3 5.95 12.9 6.1 11.7 7.15 12.05 8.65 10.6 7.85 9.2 8.65 9.5 7.15 8.35 6.1 9.95 5.95Z" />
+      <path className="redis-stack-cutout" d="M8.4 8.9 12.85 7.9 11.2 10.6Z" />
+      <path className="redis-stack-shadow" d="M13.05 6.65 15.65 7.65 13.1 8.75 10.5 7.75Z" />
     </svg>
   );
 }
@@ -146,8 +149,12 @@ function RedisShardIcon() {
 function ValkeySymbolIcon() {
   return (
     <svg aria-hidden="true" className="source-engine-icon source-engine-icon-valkey" viewBox="0 0 20 20">
-      <path d="M3.2 4.1 9.1 15.9h1.8l5.9-11.8h-3.1L10 11.9 6.3 4.1Z" />
-      <path d="M7.3 4.1 10 9.8l2.7-5.7" />
+      <path
+        className="valkey-mark"
+        d="M10 1.15 17.35 5.4v9.2L10 18.85 2.65 14.6V5.4L10 1.15Zm0 3.1L5.55 6.8v5.75l2.45 1.4v-2.8l-1.2-.68V8.28L10 6.42l3.2 1.86v3.52l-2.16 1.24v2.8l3.4-1.96V6.8L10 4.25Z"
+      />
+      <circle className="valkey-cutout" cx="10" cy="9.95" r="1.55" />
+      <path className="valkey-mark" d="M7.98 10.45 10.35 11.8v5.72L7.98 16.15Z" />
     </svg>
   );
 }
@@ -1965,7 +1972,7 @@ function IconAsset({ className = '', src }) {
 }
 
 function DatabaseSourceIcon({ engine }) {
-  return engine === 'valkey' ? <ValkeySymbolIcon /> : <RedisShardIcon />;
+  return engine === 'valkey' ? <ValkeySymbolIcon /> : <RedisStackIcon />;
 }
 
 function DatabaseSourceBadge({ className = '', source }) {
