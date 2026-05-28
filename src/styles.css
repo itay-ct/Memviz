@@ -3144,6 +3144,55 @@ select:disabled {
   color: rgba(251, 248, 241, 0.62);
 }
 
+.compare-run-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.compare-run-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.28rem 0.36rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.compare-run-color-dot {
+  width: 0.58rem;
+  height: 0.58rem;
+  border-radius: 999px;
+  flex: none;
+  box-shadow: 0 0 0 0.22rem rgba(255, 255, 255, 0.08);
+}
+
+.compare-run-legend-name {
+  min-width: 0;
+  max-width: 9rem;
+  overflow: hidden;
+  color: rgba(251, 248, 241, 0.78);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-source-badge {
+  max-width: 100%;
+  padding: 0.22rem 0.42rem 0.22rem 0.28rem;
+  box-shadow: none;
+  font-size: 0.68rem;
+}
+
+.comparison-run-head .comparison-source-badge {
+  width: fit-content;
+  margin-top: 0.22rem;
+}
+
 .comparison-table {
   border-collapse: separate;
   border-spacing: 0;

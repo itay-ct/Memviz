@@ -221,7 +221,11 @@ const EMPTY_SETUP_STATE = {
   logs: [],
 };
 
-const COMPARE_CHART_COLORS = ['#81DBFF', '#C895E3', '#DDFF21'];
+const COMPARE_ENGINE_COLORS = {
+  redis: ['#FF4438', '#E32922', '#FF867C', '#B9281F', '#FFB0A8'],
+  valkey: ['#667EFF', '#8EA2FF', '#4059E6', '#B6C1FF', '#263EC8'],
+};
+const COMPARE_FALLBACK_COLORS = ['#81DBFF', '#C895E3', '#DDFF21', '#FFB86B', '#7ED7A5'];
 const CUSTOM_DATASET_PRESET = {
   id: 'custom',
   name: 'Custom...',
@@ -1879,8 +1883,24 @@ function buildChartData(points) {
   }));
 }
 
-function getCompareColor(index) {
-  return COMPARE_CHART_COLORS[index % COMPARE_CHART_COLORS.length];
+function getCompareColor(engine, engineIndex, fallbackIndex) {
+  const palette = COMPARE_ENGINE_COLORS[engine] ?? null;
+  if (palette?.length) {
+    return palette[engineIndex % palette.length];
+  }
+
+  return COMPARE_FALLBACK_COLORS[fallbackIndex % COMPARE_FALLBACK_COLORS.length];
+}
+
+function buildCompareColorMap(comparedRuns) {
+  const engineCounts = new Map();
+
+  return comparedRuns.map(({ run }, index) => {
+    const { engine } = normalizeDatabaseSource(run?.databaseSource);
+    const engineIndex = engineCounts.get(engine) ?? 0;
+    engineCounts.set(engine, engineIndex + 1);
+    return getCompareColor(engine, engineIndex, index);
+  });
 }
 
 function canCompareRunTimelines(comparedRuns) {
@@ -4548,6 +4568,26 @@ function CompareMetricPicker({ onChange, options, selectedKey }) {
   );
 }
 
+function CompareRunLegend({ colorMap, comparedRuns }) {
+  return (
+    <div className="compare-run-legend">
+      {comparedRuns.map(({ draft, run }, index) => (
+        <div className="compare-run-legend-item" key={run.id}>
+          <span
+            className="compare-run-color-dot"
+            style={{ backgroundColor: colorMap[index] }}
+          />
+          <span className="compare-run-legend-name">{getBaseRunLabel(run, draft)}</span>
+          <DatabaseSourceBadge
+            className="comparison-source-badge"
+            source={run.databaseSource}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TimeseriesChart({
   color,
   emptyValue = 'Waiting for samples',
@@ -4655,6 +4695,7 @@ function CompareTimeseriesChart({
     color: colorMap[index],
     dataKey: `series_${index}`,
     label: getBaseRunLabel(run, draft),
+    source: run.databaseSource,
   }));
 
   return (
@@ -4669,6 +4710,8 @@ function CompareTimeseriesChart({
           selectedKey={selectedMetricKey}
         />
       </div>
+
+      <CompareRunLegend colorMap={colorMap} comparedRuns={comparedRuns} />
 
       <div className="chart-area">
         {data.length ? (
@@ -5009,7 +5052,7 @@ function ComparePanel({ comparedRuns }) {
   const rows = buildComparisonRows(comparedRuns);
   const groupedRows = groupComparisonRows(rows);
   const canCompareTimelines = canCompareRunTimelines(comparedRuns);
-  const compareColors = comparedRuns.map((_, index) => getCompareColor(index));
+  const compareColors = buildCompareColorMap(comparedRuns);
 
   async function handleExportPdf() {
     const previousCollapsedSections = collapsedSections;
@@ -5125,6 +5168,10 @@ function ComparePanel({ comparedRuns }) {
                       <span className="comparison-run-connection">
                         {run.connectionName ?? run.target?.summary ?? '—'}
                       </span>
+                      <DatabaseSourceBadge
+                        className="comparison-source-badge"
+                        source={run.databaseSource}
+                      />
                     </div>
                   </th>
                 ))}
