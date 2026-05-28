@@ -1320,6 +1320,20 @@ function getFinalMetricValue(preferred, fallback = null) {
   return fallback;
 }
 
+function getFinalLatencyValue(preferred, fallback = null) {
+  if (
+    preferred === 0 &&
+    fallback !== null &&
+    fallback !== undefined &&
+    !Number.isNaN(fallback) &&
+    fallback > 0
+  ) {
+    return fallback;
+  }
+
+  return getFinalMetricValue(preferred, fallback);
+}
+
 function getAverageThroughputValue(run) {
   const summaryTotals = run.summary?.results?.totals;
   const throughputSeries = getDisplaySeries(run, 'ops_sec');
@@ -1339,7 +1353,7 @@ function getP99LatencyValue(run) {
     return getFinalMetricValue(rollingP99, run.metrics.latency_p99);
   }
 
-  return getFinalMetricValue(
+  return getFinalLatencyValue(
     summaryTotals?.p99Latency,
     getFinalMetricValue(rollingP99, run.metrics.latency_p99),
   );
@@ -1373,7 +1387,7 @@ function buildAdvancedMetricItems(run) {
   const connectionsSeries = getDisplaySeries(run, 'connections');
   const latencySeries = getDisplaySeries(run, 'latency_ms');
   const averageThroughput = getAverageThroughputValue(run);
-  const p90Latency = getFinalMetricValue(
+  const p90Latency = getFinalLatencyValue(
     summaryTotals?.p90Latency,
     getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
   );
@@ -1405,14 +1419,14 @@ function buildAdvancedMetricItems(run) {
     {
       label: 'Average latency',
       value: formatMetric(
-        getFinalMetricValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
+        getFinalLatencyValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
         formatLatency,
       ),
     },
     {
       label: 'p50 latency',
       value: formatMetric(
-        getFinalMetricValue(summaryTotals?.p50Latency, metrics.latency_p50),
+        getFinalLatencyValue(summaryTotals?.p50Latency, metrics.latency_p50),
         formatLatency,
       ),
     },
@@ -1501,19 +1515,19 @@ function buildLatencySummaryOptions(run) {
     {
       key: 'p50',
       label: 'p50',
-      value: getFinalMetricValue(summaryTotals?.p50Latency, metrics.latency_p50),
+      value: getFinalLatencyValue(summaryTotals?.p50Latency, metrics.latency_p50),
       formatter: formatLatency,
     },
     {
       key: 'average',
       label: 'average',
-      value: getFinalMetricValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
+      value: getFinalLatencyValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
       formatter: formatLatency,
     },
     {
       key: 'p90',
       label: 'p90',
-      value: getFinalMetricValue(
+      value: getFinalLatencyValue(
         summaryTotals?.p90Latency,
         getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
       ),
@@ -1584,9 +1598,9 @@ function getComparisonSnapshot(run, draft) {
             getFinalMetricValue(run.metrics.bytes_sec_avg, getSeriesValueAtEnd(bytesSeries)),
             formatBytesPerSecond,
           ),
-    averageLatency: getFinalMetricValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
-    p50Latency: getFinalMetricValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
-    p90Latency: getFinalMetricValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
+    averageLatency: getFinalLatencyValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
+    p50Latency: getFinalLatencyValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
+    p90Latency: getFinalLatencyValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
     p99Latency: getP99LatencyValue(run),
     hitsSec: summaryTotals?.hitsSec ?? null,
     missesSec: summaryTotals?.missesSec ?? null,

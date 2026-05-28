@@ -337,6 +337,15 @@ export function recordMetric(runId, { metric, value, timestamp }) {
     return run;
   }
 
+  if (
+    metric.startsWith('latency_') &&
+    value === 0 &&
+    run.metrics[metric] !== null &&
+    run.metrics[metric] > 0
+  ) {
+    return run;
+  }
+
   if (metric === 'progress_pct') {
     if (run.status !== 'running') {
       return run;

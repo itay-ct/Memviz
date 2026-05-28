@@ -1,6 +1,12 @@
 import dgram from 'node:dgram';
 
-function parseLine(line) {
+function isRunLabelSegment(segment) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    segment,
+  );
+}
+
+export function parseStatsdLine(line) {
   const trimmedLine = line.trim();
   if (!trimmedLine) {
     return null;
@@ -28,6 +34,19 @@ function parseLine(line) {
     return null;
   }
 
+  const runLabelIndex = segments.findIndex(isRunLabelSegment);
+  if (runLabelIndex !== -1 && runLabelIndex < segments.length - 1) {
+    return {
+      prefix: segments.slice(0, runLabelIndex).join('.'),
+      runLabel: segments[runLabelIndex],
+      metric: segments.at(-1),
+      value,
+      type: payload[1],
+      timestamp: new Date().toISOString(),
+      raw: trimmedLine,
+    };
+  }
+
   return {
     prefix: segments.slice(0, -2).join('.'),
     runLabel: segments.at(-2),
@@ -50,7 +69,7 @@ export function createStatsdReceiver({
   socket.on('message', (buffer) => {
     const packet = buffer.toString('utf8');
     for (const line of packet.split(/\r?\n/)) {
-      const parsed = parseLine(line);
+      const parsed = parseStatsdLine(line);
       if (parsed) {
         onMetric(parsed);
       }

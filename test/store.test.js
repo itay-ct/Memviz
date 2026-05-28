@@ -77,3 +77,33 @@ test('recordMetric ignores progress updates after a run has failed', () => {
 
   assert.equal(run.metrics.progress_pct, 0);
 });
+
+test('recordMetric keeps nonzero latency when a terminal reset reports zero', () => {
+  clearRuns();
+  const run = createRun({
+    id: 'run-3',
+    label: 'run-3',
+    scenario,
+    connection,
+    command: 'memtier_benchmark',
+  });
+
+  recordMetric(run.id, {
+    metric: 'latency_p50',
+    value: 1.25,
+    timestamp: '2026-05-28T00:00:00.000Z',
+  });
+  recordMetric(run.id, {
+    metric: 'latency_p50',
+    value: 0,
+    timestamp: '2026-05-28T00:00:01.000Z',
+  });
+
+  assert.equal(run.metrics.latency_p50, 1.25);
+  assert.deepEqual(run.series.latency_p50, [
+    {
+      timestamp: '2026-05-28T00:00:00.000Z',
+      value: 1.25,
+    },
+  ]);
+});
