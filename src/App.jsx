@@ -2167,57 +2167,59 @@ function ConnectionFormPanel({
   onHostOrUrlPaste,
 }) {
   return (
-    <form className="topbar-connect-form" onSubmit={onConnect}>
-      <div className="topbar-host-source-group">
+    <div className="topbar-connect-form-shell">
+      <form className="topbar-connect-form" onSubmit={onConnect}>
+        <div className="topbar-host-source-group">
+          <input
+            autoComplete="off"
+            name="hostOrUrl"
+            onChange={onFormChange}
+            onPaste={onHostOrUrlPaste}
+            placeholder="Host or URL"
+            value={formState.hostOrUrl}
+          />
+          <DatabaseSourceSelects
+            className="topbar-source-selects"
+            compact
+            formState={formState}
+            onFormChange={onFormChange}
+          />
+        </div>
         <input
-          autoComplete="off"
-          name="hostOrUrl"
+          inputMode="numeric"
+          name="port"
           onChange={onFormChange}
-          onPaste={onHostOrUrlPaste}
-          placeholder="Host or URL"
-          value={formState.hostOrUrl}
+          placeholder="Port"
+          value={formState.port}
         />
-        <DatabaseSourceSelects
-          className="topbar-source-selects"
-          compact
-          formState={formState}
-          onFormChange={onFormChange}
+        <input
+          autoComplete="username"
+          name="username"
+          onChange={onFormChange}
+          placeholder="Username"
+          value={formState.username}
         />
-      </div>
-      <input
-        inputMode="numeric"
-        name="port"
-        onChange={onFormChange}
-        placeholder="Port"
-        value={formState.port}
-      />
-      <input
-        autoComplete="username"
-        name="username"
-        onChange={onFormChange}
-        placeholder="Username"
-        value={formState.username}
-      />
-      <input
-        autoComplete="current-password"
-        name="password"
-        onChange={onFormChange}
-        placeholder="Password"
-        type="password"
-        value={formState.password}
-      />
-      <div className="topbar-connect-actions">
-        <button className="primary-button" disabled={connectDisabled} type="submit">
-          {connectPending ? 'Connecting…' : 'Connect'}
-        </button>
-        {onClose ? (
-          <button className="ghost-button topbar-close-form-button" onClick={onClose} type="button">
-            Close
+        <input
+          autoComplete="current-password"
+          name="password"
+          onChange={onFormChange}
+          placeholder="Password"
+          type="password"
+          value={formState.password}
+        />
+        <div className="topbar-connect-actions">
+          <button className="primary-button" disabled={connectDisabled} type="submit">
+            {connectPending ? 'Connecting…' : 'Connect'}
           </button>
-        ) : null}
-      </div>
-      {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
-    </form>
+          {onClose ? (
+            <button className="ghost-button topbar-close-form-button" onClick={onClose} type="button">
+              Close
+            </button>
+          ) : null}
+        </div>
+        {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
+      </form>
+    </div>
   );
 }
 
