@@ -2162,6 +2162,7 @@ function ConnectionFormPanel({
   formState,
   formError,
   onConnect,
+  onClose,
   onFormChange,
   onHostOrUrlPaste,
 }) {
@@ -2205,9 +2206,16 @@ function ConnectionFormPanel({
         type="password"
         value={formState.password}
       />
-      <button className="primary-button" disabled={connectDisabled} type="submit">
-        {connectPending ? 'Connecting…' : 'Connect'}
-      </button>
+      <div className="topbar-connect-actions">
+        <button className="primary-button" disabled={connectDisabled} type="submit">
+          {connectPending ? 'Connecting…' : 'Connect'}
+        </button>
+        {onClose ? (
+          <button className="ghost-button topbar-close-form-button" onClick={onClose} type="button">
+            Close
+          </button>
+        ) : null}
+      </div>
       {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
     </form>
   );
@@ -3050,7 +3058,9 @@ function TopBar({
   }, [onConnectionFormVisibilityChange, showForm]);
 
   return (
-    <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
+    <header
+      className={`topbar ${!connections.length ? 'topbar-disconnected' : ''} ${showForm ? 'topbar-form-open' : ''}`}
+    >
       <div className="topbar-brand">
         <div className="topbar-brand-mark">
           <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
@@ -3109,13 +3119,14 @@ function TopBar({
             formState={formState}
             formError={connectError || validationError}
             onConnect={onConnect}
+            onClose={connections.length ? () => setShowAddConnectionForm(false) : null}
             onFormChange={onFormChange}
             onHostOrUrlPaste={onHostOrUrlPaste}
           />
         ) : null}
       </div>
 
-      {connections.length ? (
+      {connections.length && !showForm ? (
         <div className="topbar-trailing">
           <button
             className="ghost-button"

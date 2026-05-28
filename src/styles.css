@@ -367,6 +367,10 @@ select:disabled {
   grid-template-columns: auto minmax(0, 1fr);
 }
 
+.topbar-form-open {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
 .topbar-brand {
   display: flex;
   align-items: center;
@@ -896,11 +900,12 @@ select:disabled {
 
 .topbar-connect-form {
   display: grid;
-  grid-template-columns: minmax(220px, 1.45fr) 88px 110px 110px auto;
+  grid-template-columns: minmax(320px, 1.55fr) 88px minmax(116px, 0.62fr) minmax(116px, 0.62fr) minmax(118px, auto);
   align-items: start;
   gap: 0.65rem;
-  flex: 1 1 560px;
+  flex: 1 1 760px;
   min-width: min(100%, 560px);
+  max-width: 100%;
   padding: 0.8rem;
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.9);
@@ -911,6 +916,13 @@ select:disabled {
 .topbar-host-source-group {
   display: grid;
   gap: 0.42rem;
+  min-width: 0;
+}
+
+.topbar-connect-actions {
+  display: grid;
+  gap: 0.42rem;
+  align-self: start;
   min-width: 0;
 }
 
@@ -1219,12 +1231,14 @@ select:disabled {
 }
 
 .topbar-connect-form .primary-button {
+  width: 100%;
   min-height: 2.8rem;
   align-self: start;
+  padding-inline: 1rem;
 }
 
 .topbar-source-selects {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
   gap: 0.42rem;
 }
 
@@ -1234,6 +1248,17 @@ select:disabled {
   padding: 0.42rem 1.75rem 0.42rem 0.62rem;
   font-size: 0.78rem;
   line-height: 1.1;
+}
+
+.topbar-close-form-button {
+  width: 100%;
+  min-height: 2.05rem;
+  padding: 0.42rem 0.75rem;
+  box-shadow: none;
+}
+
+.topbar-form-error {
+  grid-column: 1 / -1;
 }
 
 .run-pill,
@@ -3338,6 +3363,15 @@ select:disabled {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
 
+  .topbar-host-source-group {
+    grid-column: 1 / -1;
+  }
+
+  .topbar-connect-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .topbar-trailing {
     justify-items: start;
   }
@@ -3419,6 +3453,11 @@ select:disabled {
   .topbar-connect-form {
     grid-template-columns: 1fr;
     width: 100%;
+  }
+
+  .topbar-source-selects,
+  .topbar-connect-actions {
+    grid-template-columns: 1fr;
   }
 
   .topbar-connect-mark {
