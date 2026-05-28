@@ -874,8 +874,8 @@ select:disabled {
 
 .topbar-connect-form {
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) 88px 110px 110px minmax(220px, 0.95fr) auto;
-  align-items: center;
+  grid-template-columns: minmax(220px, 1.45fr) 88px 110px 110px auto;
+  align-items: start;
   gap: 0.65rem;
   flex: 1 1 560px;
   min-width: min(100%, 560px);
@@ -884,6 +884,12 @@ select:disabled {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(9, 26, 35, 0.08);
   box-shadow: 0 12px 28px rgba(9, 26, 35, 0.06);
+}
+
+.topbar-host-source-group {
+  display: grid;
+  gap: 0.42rem;
+  min-width: 0;
 }
 
 .modal-scrim {
@@ -1188,6 +1194,24 @@ select:disabled {
 .topbar-connect-form select:focus {
   outline: none;
   border-color: rgba(255, 68, 56, 0.44);
+}
+
+.topbar-connect-form .primary-button {
+  min-height: 2.8rem;
+  align-self: start;
+}
+
+.topbar-source-selects {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.topbar-connect-form .topbar-source-selects select {
+  min-height: 2.05rem;
+  border-radius: 10px;
+  padding: 0.42rem 1.75rem 0.42rem 0.62rem;
+  font-size: 0.78rem;
+  line-height: 1.1;
 }
 
 .run-pill,

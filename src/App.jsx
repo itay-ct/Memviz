@@ -2140,14 +2140,22 @@ function ConnectionFormPanel({
 }) {
   return (
     <form className="topbar-connect-form" onSubmit={onConnect}>
-      <input
-        autoComplete="off"
-        name="hostOrUrl"
-        onChange={onFormChange}
-        onPaste={onHostOrUrlPaste}
-        placeholder="Host or URL"
-        value={formState.hostOrUrl}
-      />
+      <div className="topbar-host-source-group">
+        <input
+          autoComplete="off"
+          name="hostOrUrl"
+          onChange={onFormChange}
+          onPaste={onHostOrUrlPaste}
+          placeholder="Host or URL"
+          value={formState.hostOrUrl}
+        />
+        <DatabaseSourceSelects
+          className="topbar-source-selects"
+          compact
+          formState={formState}
+          onFormChange={onFormChange}
+        />
+      </div>
       <input
         inputMode="numeric"
         name="port"
@@ -2170,7 +2178,6 @@ function ConnectionFormPanel({
         type="password"
         value={formState.password}
       />
-      <DatabaseSourceSelects compact formState={formState} onFormChange={onFormChange} />
       <button className="primary-button" disabled={connectDisabled} type="submit">
         {connectPending ? 'Connecting…' : 'Connect'}
       </button>
