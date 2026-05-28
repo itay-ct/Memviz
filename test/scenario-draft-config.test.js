@@ -57,6 +57,19 @@ test('switching to request mode disables staircase', () => {
   assert.equal(nextConfig.staircaseEnabled, false);
 });
 
+test('toggling cluster mode updates the draft config', () => {
+  const nextConfig = applyScenarioDraftConfigChange(
+    {
+      clusterModeEnabled: false,
+    },
+    scenario,
+    'clusterModeEnabled',
+    true,
+  );
+
+  assert.equal(nextConfig.clusterModeEnabled, true);
+});
+
 test('shrinking final clients keeps staircase start below target', () => {
   const nextConfig = applyScenarioDraftConfigChange(
     {

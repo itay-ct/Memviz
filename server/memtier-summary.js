@@ -18,6 +18,16 @@ const configPatterns = [
 
 const rowNames = new Set(['sets', 'gets', 'waits', 'totals']);
 
+export function parseMemtierProgressPercent(line) {
+  const match = String(line ?? '').match(/^\[RUN\s+#\d+\s+(\d+(?:\.\d+)?)%,/i);
+  if (!match) {
+    return null;
+  }
+
+  const progress = Number(match[1]);
+  return Number.isFinite(progress) ? progress : null;
+}
+
 export function createEmptySummary() {
   return {
     config: {},

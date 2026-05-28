@@ -55,6 +55,7 @@ import {
   STATSD_HOST,
   STATSD_PORT,
 } from './memtier.js';
+import { parseMemtierProgressPercent } from './memtier-summary.js';
 import {
   createRedisInsightProxyHandler,
   createRedisInsightService,
@@ -99,6 +100,11 @@ const FATAL_MEMTIER_PATTERNS = [
     regex: /syntax error at offset/i,
     message: (line) =>
       `Redis rejected the benchmark command syntax: ${line}. This usually means the query syntax or index field type does not match the benchmark command.`,
+  },
+  {
+    regex: /cluster slot failed/i,
+    message: (line) =>
+      `Cluster Aware requires a Redis Cluster target. Memtier could not read cluster slots from Redis: ${line}`,
   },
 ];
 
@@ -176,6 +182,33 @@ function classifyFatalMemtierLine(text) {
   }
 
   return null;
+}
+
+function recordMemtierProgressLine(runId, text) {
+  const progressPercent = parseMemtierProgressPercent(text);
+  if (progressPercent === null) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const run = recordMetric(runId, {
+    metric: 'progress_pct',
+    value: progressPercent,
+    timestamp,
+  });
+  if (!run) {
+    return;
+  }
+
+  broadcast({
+    type: 'metric',
+    runId,
+    metric: 'progress_pct',
+    value: progressPercent,
+    metrics: run.metrics,
+    series: run.series,
+    timestamp,
+  });
 }
 
 async function verifyRedisConnection(target) {
@@ -1095,6 +1128,9 @@ app.post('/api/run', async (req, res) => {
         const entry = appendLog(runId, { stream, text });
         if (stream === 'stdout') {
           recordSummaryLine(runId, text);
+        }
+        if (stream === 'stderr' && !fatalAbortMessage) {
+          recordMemtierProgressLine(runId, text);
         }
         if (entry) {
           broadcast({

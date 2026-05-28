@@ -338,7 +338,12 @@ export function recordMetric(runId, { metric, value, timestamp }) {
   }
 
   if (metric === 'progress_pct') {
-    run.metrics.progress_pct = Math.max(0, Math.min(100, value));
+    if (run.status !== 'running') {
+      return run;
+    }
+
+    const nextProgress = Math.max(0, Math.min(100, value));
+    run.metrics.progress_pct = Math.max(run.metrics.progress_pct, nextProgress);
   } else if (metric === 'connection_errors') {
     run.metrics.connection_errors = value;
   } else {

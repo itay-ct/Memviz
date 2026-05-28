@@ -85,6 +85,7 @@ function scenarioDescription(config, kind) {
     `${config.threads} threads`,
     durationLabel,
     `pipe ${config.pipeline}`,
+    config.clusterModeEnabled ? 'cluster aware' : null,
     `prefix ${config.keyPrefix}`,
     shapeLabel,
     rateLimitLabel,
@@ -293,6 +294,10 @@ export function normalizeScenarioDefinition(input = {}) {
       rawDefaults.staircaseEnabled ?? rawDefaults.staircase_enabled,
       false,
     ),
+    clusterModeEnabled: normalizeBoolean(
+      rawDefaults.clusterModeEnabled ?? rawDefaults.cluster_mode_enabled,
+      false,
+    ),
     rateLimitEnabled: normalizeBoolean(rawDefaults.rateLimitEnabled, false),
     rateLimit: normalizeInteger(rawDefaults.rateLimit, 20000),
     pipeline: normalizeInteger(rawDefaults.pipeline, 1),
@@ -337,6 +342,10 @@ export function normalizeScenarioConfig(scenario, input = {}) {
     staircaseEnabled: normalizeBoolean(
       input.staircaseEnabled ?? input.staircase_enabled,
       scenario.defaults.staircaseEnabled ?? false,
+    ),
+    clusterModeEnabled: normalizeBoolean(
+      input.clusterModeEnabled ?? input.cluster_mode_enabled,
+      scenario.defaults.clusterModeEnabled ?? false,
     ),
     rateLimitEnabled: normalizeBoolean(
       input.rateLimitEnabled,
@@ -392,6 +401,10 @@ export function buildMemtierArgsFromConfig(scenario, config) {
     '--key-prefix',
     config.keyPrefix,
   ];
+
+  if (config.clusterModeEnabled) {
+    args.push('--cluster-mode');
+  }
 
   if (scenario.kind === 'command') {
     args.push('--command', config.command, '--command-stats-breakdown', 'line');

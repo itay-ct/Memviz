@@ -91,6 +91,15 @@ test('normalizeScenarioConfig accepts valid staircase config', () => {
   assert.equal(config.stepDuration, 10);
 });
 
+test('normalizeScenarioConfig accepts cluster mode config', () => {
+  const scenario = createScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {
+    clusterModeEnabled: true,
+  });
+
+  assert.equal(config.clusterModeEnabled, true);
+});
+
 test('buildMemtierArgsFromConfig keeps flat runs unchanged', () => {
   const scenario = createScenarioDefinition();
   const config = normalizeScenarioConfig(scenario, {});
@@ -106,6 +115,33 @@ test('buildMemtierArgsFromConfig keeps flat runs unchanged', () => {
     '50,90,99,99.9',
     '--key-prefix',
     'memtier-',
+    '--ratio',
+    '1:10',
+    '--data-size',
+    '32',
+    '--test-time',
+    '30',
+  ]);
+});
+
+test('buildMemtierArgsFromConfig includes cluster mode flag when enabled', () => {
+  const scenario = createScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {
+    clusterModeEnabled: true,
+  });
+
+  assert.deepEqual(buildMemtierArgsFromConfig(scenario, config), [
+    '--clients',
+    '20',
+    '--threads',
+    '2',
+    '--pipeline',
+    '1',
+    '--print-percentiles',
+    '50,90,99,99.9',
+    '--key-prefix',
+    'memtier-',
+    '--cluster-mode',
     '--ratio',
     '1:10',
     '--data-size',

@@ -709,6 +709,7 @@ function describeDraftConfig(config) {
     `${config.threads} threads`,
     formatRunLimit(config),
     `pipe ${config.pipeline}`,
+    config.clusterModeEnabled ? 'cluster aware' : null,
     `prefix ${formatKeyPrefixSummary(config)}`,
     describeScenarioShape(config),
     config.rateLimitEnabled ? `cap ${formatRateLimit(config.rateLimit)}` : null,
@@ -3379,6 +3380,20 @@ function ConfigTable({
                   value={config.rateLimit}
                 />
               ) : null}
+            </div>
+          </ConfigRow>
+
+          <ConfigRow label="Cluster">
+            <div className="config-composite-control config-composite-control-paired">
+              <label className="config-checkbox config-checkbox-wide">
+                <input
+                  checked={Boolean(config.clusterModeEnabled)}
+                  disabled={disabled}
+                  onChange={(event) => onConfigChange('clusterModeEnabled', event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Cluster Aware</span>
+              </label>
             </div>
           </ConfigRow>
 
