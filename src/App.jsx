@@ -38,6 +38,15 @@ import {
   getReachedClientsPerThreadAtTime,
   hasStaircaseProfile,
 } from '../shared/scenario-load-profile.js';
+import {
+  DATABASE_ENGINE_OPTIONS,
+  DATABASE_SERVICE_OPTIONS,
+  DEFAULT_DATABASE_ENGINE,
+  DEFAULT_DATABASE_SERVICE,
+  getDatabaseEngineLabel,
+  getDatabaseServiceLabel,
+  normalizeDatabaseSource,
+} from '../shared/database-source.js';
 
 function CheckIcon() {
   return (
@@ -125,11 +134,33 @@ function TrashIcon() {
   );
 }
 
+function RedisShardIcon() {
+  return (
+    <svg aria-hidden="true" className="source-engine-icon source-engine-icon-redis" viewBox="0 0 20 20">
+      <rect height="5.8" rx="1.4" width="12.4" x="3.8" y="3" />
+      <rect height="5.8" rx="1.4" width="12.4" x="3.8" y="7.1" />
+      <rect height="5.8" rx="1.4" width="12.4" x="3.8" y="11.2" />
+      <path d="M6.2 5.9h4.7M6.2 10h4.7M6.2 14.1h4.7" />
+    </svg>
+  );
+}
+
+function ValkeySymbolIcon() {
+  return (
+    <svg aria-hidden="true" className="source-engine-icon source-engine-icon-valkey" viewBox="0 0 20 20">
+      <path d="M3.2 4.1 9.1 15.9h1.8l5.9-11.8h-3.1L10 11.9 6.3 4.1Z" />
+      <path d="M7.3 4.1 10 9.8l2.7-5.7" />
+    </svg>
+  );
+}
+
 const DEFAULT_FORM = {
   hostOrUrl: '127.0.0.1',
   port: '6379',
   username: 'default',
   password: '',
+  engine: DEFAULT_DATABASE_ENGINE,
+  service: DEFAULT_DATABASE_SERVICE,
 };
 
 const BLANK_CONNECTION_FORM = {
@@ -137,6 +168,8 @@ const BLANK_CONNECTION_FORM = {
   port: '',
   username: '',
   password: '',
+  engine: DEFAULT_DATABASE_ENGINE,
+  service: DEFAULT_DATABASE_SERVICE,
 };
 
 const EMPTY_APP_STATE = {
@@ -1917,6 +1950,82 @@ function IconAsset({ className = '', src }) {
   return <img alt="" aria-hidden="true" className={`icon-asset ${className}`.trim()} src={src} />;
 }
 
+function DatabaseSourceIcon({ engine }) {
+  return engine === 'valkey' ? <ValkeySymbolIcon /> : <RedisShardIcon />;
+}
+
+function DatabaseSourceBadge({ className = '', source }) {
+  const normalizedSource = normalizeDatabaseSource(source);
+  const engineLabel = getDatabaseEngineLabel(normalizedSource.engine);
+  const serviceLabel = getDatabaseServiceLabel(normalizedSource.service);
+
+  return (
+    <span
+      aria-label={`${serviceLabel}, ${engineLabel}`}
+      className={`database-source-badge database-source-badge-${normalizedSource.engine} ${className}`.trim()}
+      title={`${serviceLabel} / ${engineLabel}`}
+    >
+      <DatabaseSourceIcon engine={normalizedSource.engine} />
+      <span>{`${serviceLabel} / ${engineLabel}`}</span>
+    </span>
+  );
+}
+
+function DatabaseSourceSelects({ className = '', compact = false, formState, onFormChange }) {
+  const engineSelect = (
+    <select
+      aria-label={compact ? 'Engine' : undefined}
+      className="database-source-select"
+      name="engine"
+      onChange={onFormChange}
+      value={formState.engine ?? DEFAULT_DATABASE_ENGINE}
+    >
+      {DATABASE_ENGINE_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+  const serviceSelect = (
+    <select
+      aria-label={compact ? 'Service' : undefined}
+      className="database-source-select"
+      name="service"
+      onChange={onFormChange}
+      value={formState.service ?? DEFAULT_DATABASE_SERVICE}
+    >
+      {DATABASE_SERVICE_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+
+  if (compact) {
+    return (
+      <div className={`database-source-select-row database-source-select-row-compact ${className}`.trim()}>
+        {engineSelect}
+        {serviceSelect}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`form-row database-source-select-row ${className}`.trim()}>
+      <label>
+        <span>Engine</span>
+        {engineSelect}
+      </label>
+      <label>
+        <span>Service</span>
+        {serviceSelect}
+      </label>
+    </div>
+  );
+}
+
 function ConnectionScreen({
   formState,
   onFormChange,
@@ -2007,6 +2116,8 @@ function ConnectionScreen({
             />
           </label>
 
+          <DatabaseSourceSelects formState={formState} onFormChange={onFormChange} />
+
           {connectError ? <p className="form-error">{connectError}</p> : null}
 
           <button className="primary-button" disabled={connectDisabled} type="submit">
@@ -2059,6 +2170,7 @@ function ConnectionFormPanel({
         type="password"
         value={formState.password}
       />
+      <DatabaseSourceSelects compact formState={formState} onFormChange={onFormChange} />
       <button className="primary-button" disabled={connectDisabled} type="submit">
         {connectPending ? 'Connecting…' : 'Connect'}
       </button>
@@ -2779,6 +2891,11 @@ function ConnectionCard({
       {connection.load?.status === 'failed' ? (
         <p className="connection-load-error">{connection.load.error ?? 'Dataset load failed'}</p>
       ) : null}
+
+      <DatabaseSourceBadge
+        className="connection-source-badge"
+        source={connection.databaseSource}
+      />
 
       <div
         className={`connection-menu-wrap ${showMenu ? 'is-open' : ''}`}
@@ -3683,6 +3800,7 @@ function ScenarioCard({
   compareSelectionDisabled,
   config,
   connectionCount,
+  databaseSource,
   disabled,
   draft,
   isLaunching,
@@ -3983,6 +4101,13 @@ function ScenarioCard({
           </div>
         </div>
       ) : null}
+
+      {databaseSource ? (
+        <DatabaseSourceBadge
+          className="scenario-source-badge"
+          source={databaseSource}
+        />
+      ) : null}
     </article>
   );
 }
@@ -4023,6 +4148,8 @@ function ScenarioList({
       setShowNewTestMenu(false);
     }
   }, [canCreateDraft, compareMode]);
+
+  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
 
   return (
     <aside className="scenario-panel">
@@ -4089,6 +4216,10 @@ function ScenarioList({
           drafts.map((draft) => {
             const scenario = scenarioMap.get(draft.scenarioId);
             const run = draft.runId ? runById.get(draft.runId) ?? null : null;
+            const databaseSource =
+              run?.databaseSource ??
+              connectionById.get(draft.connectionId ?? run?.connectionId)?.databaseSource ??
+              null;
             if (!scenario) {
               return null;
             }
@@ -4102,6 +4233,7 @@ function ScenarioList({
                 }
                 config={draft.config}
                 connectionCount={connections.length}
+                databaseSource={databaseSource}
                 disabled={hasRunningRuns || runPendingDraftId !== null}
                 draft={draft}
                 isCustomizing={draft.isCustomizing}

@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  clearConnections,
   clearRuns,
+  createConnection,
   createRun,
   finishRun,
+  getConnection,
   recordMetric,
+  serializeRun,
 } from '../server/store.js';
 
 const connection = {
@@ -106,4 +110,36 @@ test('recordMetric keeps nonzero latency when a terminal reset reports zero', ()
       value: 1.25,
     },
   ]);
+});
+
+test('connection database source is preserved on serialized runs', () => {
+  clearConnections();
+  clearRuns();
+
+  const publicConnection = createConnection({
+    id: 'redis-cloud-valkey',
+    name: 'Redis Cloud Valkey',
+    target: connection.target,
+    databaseSource: {
+      engine: 'valkey',
+      service: 'redis-cloud',
+    },
+  });
+  const storedConnection = getConnection(publicConnection.id);
+  const run = createRun({
+    id: 'run-4',
+    label: 'run-4',
+    scenario,
+    connection: storedConnection,
+    command: 'memtier_benchmark',
+  });
+
+  assert.deepEqual(publicConnection.databaseSource, {
+    engine: 'valkey',
+    service: 'redis-cloud',
+  });
+  assert.deepEqual(serializeRun(run, { includeLogs: false }).databaseSource, {
+    engine: 'valkey',
+    service: 'redis-cloud',
+  });
 });

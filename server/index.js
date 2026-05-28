@@ -19,6 +19,10 @@ import {
 import { buildRedisUrl, normalizeRedisTarget } from './redis-target.js';
 import { buildRunnableScenario } from './scenarios.js';
 import {
+  DEFAULT_DATABASE_ENGINE,
+  DEFAULT_DATABASE_SERVICE,
+} from '../shared/database-source.js';
+import {
   appendLog,
   clearRuns,
   createConnection,
@@ -302,6 +306,10 @@ async function bootstrapDefaultConnectionIfAvailable() {
       id: randomUUID(),
       name: DEFAULT_TARGET_NAME,
       target,
+      databaseSource: {
+        engine: DEFAULT_DATABASE_ENGINE,
+        service: DEFAULT_DATABASE_SERVICE,
+      },
     });
     broadcastState();
     void startConnectionRttProbe(connection.id);
@@ -806,6 +814,10 @@ app.post('/api/connect', async (req, res) => {
       id: randomUUID(),
       name: req.body?.name,
       target,
+      databaseSource: {
+        engine: req.body?.engine,
+        service: req.body?.service,
+      },
     });
 
     const state = toPublicState();
