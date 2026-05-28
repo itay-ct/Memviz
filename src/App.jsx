@@ -222,8 +222,8 @@ const EMPTY_SETUP_STATE = {
 };
 
 const COMPARE_ENGINE_COLORS = {
-  redis: ['#FF4438', '#E32922', '#FF867C', '#B9281F', '#FFB0A8'],
-  valkey: ['#667EFF', '#8EA2FF', '#4059E6', '#B6C1FF', '#263EC8'],
+  redis: ['#FF4438', '#FF9F1C', '#F72585', '#FFD166'],
+  valkey: ['#667EFF', '#00C2FF', '#B967FF', '#2DD4BF'],
 };
 const COMPARE_FALLBACK_COLORS = ['#81DBFF', '#C895E3', '#DDFF21', '#FFB86B', '#7ED7A5'];
 const CUSTOM_DATASET_PRESET = {
