@@ -3087,7 +3087,7 @@ function TopBar({
   const setupNote =
     setup.status === 'error' ? 'Setup needs attention' : !setupReady ? 'Preparing memtier' : null;
   const canAddConnection =
-    setupReady && connections.length < 3 && !hasRunningRuns && !hasActiveLoads;
+    setupReady && connections.length < 4 && !hasRunningRuns && !hasActiveLoads;
   const showInlineForm = !connections.length;
   const showAddConnectionModal = connections.length > 0 && showAddConnectionForm;
   const formVisible = showInlineForm || showAddConnectionModal;
@@ -6383,7 +6383,7 @@ export default function App() {
     setupState.status !== 'ready' ||
     hasRunningRuns ||
     hasActiveLoads ||
-    connections.length >= 3;
+    connections.length >= 4;
 
   async function handleRetrySetup() {
     try {
