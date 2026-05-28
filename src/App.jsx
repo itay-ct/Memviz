@@ -95,6 +95,36 @@ function MoreIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="trash-icon" viewBox="0 0 16 16">
+      <path
+        d="M5.25 4.25V3.4c0-.7.48-1.15 1.2-1.15h3.1c.72 0 1.2.45 1.2 1.15v.85"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M3.35 4.45h9.3M4.55 6l.45 6.15c.05.78.55 1.2 1.3 1.2h3.4c.75 0 1.25-.42 1.3-1.2L11.45 6"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M6.85 7.05v4.05M9.15 7.05v4.05"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+    </svg>
+  );
+}
+
 const DEFAULT_FORM = {
   hostOrUrl: '127.0.0.1',
   port: '6379',
@@ -3648,6 +3678,7 @@ function ScenarioCard({
   isCustomizing,
   onRename,
   onCancelRun,
+  onDelete,
   selectedConnectionName,
   onSelect,
   onToggleCompareSelection,
@@ -3804,79 +3835,99 @@ function ScenarioCard({
                 <span />
               </label>
             ) : null
-          ) : !isLocked ? (
+          ) : (
             <>
-              <button
-                className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
-                disabled={disabled}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleCustomize(draft.id);
-                }}
-                type="button"
-              >
-                <IconAsset className="button-icon" src={settingsIconMidnight} />
-              </button>
-              <div className="play-menu-wrap">
+              {!isRunning ? (
                 <button
-                  className="play-button"
+                  aria-label={`Delete ${title}`}
+                  className="delete-test-button"
                   disabled={disabled}
-                  onClick={() => {
-                    if (connectionCount <= 1) {
-                      onRun(draft.id, 'selected');
-                      return;
-                    }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(draft.id);
+                  }}
+                  title="Delete test"
+                  type="button"
+                >
+                  <TrashIcon />
+                </button>
+              ) : null}
 
-                    setShowRunMenu((open) => !open);
+              {!isLocked ? (
+                <>
+                  <button
+                    className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
+                    disabled={disabled}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleCustomize(draft.id);
+                    }}
+                    type="button"
+                  >
+                    <IconAsset className="button-icon" src={settingsIconMidnight} />
+                  </button>
+                  <div className="play-menu-wrap">
+                    <button
+                      className="play-button"
+                      disabled={disabled}
+                      onClick={() => {
+                        if (connectionCount <= 1) {
+                          onRun(draft.id, 'selected');
+                          return;
+                        }
+
+                        setShowRunMenu((open) => !open);
+                      }}
+                      type="button"
+                    >
+                      {isLaunching ? '…' : '▶'}
+                    </button>
+
+                    {showRunMenu && connectionCount > 1 ? (
+                      <div className="play-menu">
+                        <button
+                          className="play-menu-option"
+                          onClick={() => {
+                            setShowRunMenu(false);
+                            onRun(draft.id, 'selected');
+                          }}
+                          type="button"
+                        >
+                          {`Run on ${selectedConnectionName ?? 'selected connection'}`}
+                        </button>
+                        <button
+                          className="play-menu-option"
+                          onClick={() => {
+                            setShowRunMenu(false);
+                            onRun(draft.id, 'all');
+                          }}
+                          type="button"
+                        >
+                          Run on all connections
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : isRunning ? (
+                <button
+                  className="running-control"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCancelRun();
                   }}
                   type="button"
                 >
-                  {isLaunching ? '…' : '▶'}
+                  <RunningIndicator />
+                  <span className="stop-run-button">■</span>
                 </button>
-
-                {showRunMenu && connectionCount > 1 ? (
-                  <div className="play-menu">
-                    <button
-                      className="play-menu-option"
-                      onClick={() => {
-                        setShowRunMenu(false);
-                        onRun(draft.id, 'selected');
-                      }}
-                      type="button"
-                    >
-                      {`Run on ${selectedConnectionName ?? 'selected connection'}`}
-                    </button>
-                    <button
-                      className="play-menu-option"
-                      onClick={() => {
-                        setShowRunMenu(false);
-                        onRun(draft.id, 'all');
-                      }}
-                      type="button"
-                    >
-                      Run on all connections
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+              ) : run?.status !== 'completed' ? (
+                <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
+                  {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
+                </span>
+              ) : null}
             </>
-          ) : run?.status === 'running' ? (
-            <button
-              className="running-control"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCancelRun();
-              }}
-              type="button"
-            >
-              <RunningIndicator />
-              <span className="stop-run-button">■</span>
-            </button>
-          ) : run?.status !== 'completed' ? (
-            <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
-              {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
-            </span>
-          ) : null}
+          )}
         </div>
       </div>
 
@@ -3933,6 +3984,7 @@ function ScenarioList({
   hasRunningRuns,
   onClear,
   onCompareSelected,
+  onDelete,
   onRename,
   onCancelRun,
   onSelect,
@@ -4045,6 +4097,7 @@ function ScenarioList({
                 isSelected={!compareMode && selectedDraftId === draft.id}
                 key={draft.id}
                 onCancelRun={onCancelRun}
+                onDelete={onDelete}
                 onRename={onRename}
                 onSelect={onSelect}
                 onToggleCompareSelection={onToggleCompareSelection}
@@ -6137,6 +6190,54 @@ export default function App() {
     );
   }
 
+  async function handleDeleteDraft(draftId) {
+    const draft = drafts.find((entry) => entry.id === draftId);
+    if (!draft) {
+      return;
+    }
+
+    setConnectError('');
+
+    const removeDraftFromList = () => {
+      const remainingDrafts = drafts.filter((entry) => entry.id !== draftId);
+      setDrafts(remainingDrafts);
+
+      if (selectedDraftId === draftId) {
+        setSelectedDraftId(remainingDrafts[0]?.id ?? null);
+      }
+    };
+
+    if (!draft.runId) {
+      removeDraftFromList();
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/run/${encodeURIComponent(draft.runId)}`, {
+        method: 'DELETE',
+      });
+      const payload = await readJsonResponse(response, 'Delete failed.');
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Delete failed.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+      setSelectedComparisonRunIds((currentIds) => {
+        const nextIds = currentIds.filter((runId) => runId !== draft.runId);
+        if (nextIds.length < 2) {
+          setCompareView(false);
+        }
+        return nextIds;
+      });
+      removeDraftFromList();
+    } catch (error) {
+      setConnectError(error.message);
+    }
+  }
+
   function handleNewTest(scenarioId) {
     if (hasReadyDraft || !appState.scenarios.length || !connections.length) {
       return;
@@ -6279,6 +6380,7 @@ export default function App() {
             onCancelRun={() => setShowCancelRunPrompt(true)}
             onClear={handleClear}
             onCompareSelected={handleCompareSelected}
+            onDelete={handleDeleteDraft}
             onRename={handleRenameDraft}
             onSelect={handleSelectDraft}
             onToggleCompareMode={handleToggleCompareMode}

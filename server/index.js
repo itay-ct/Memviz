@@ -1254,6 +1254,35 @@ app.post('/api/run/cancel', async (_req, res) => {
   });
 });
 
+app.delete('/api/run/:id', (req, res) => {
+  const run = getRun(req.params.id);
+
+  if (!run) {
+    res.status(404).json({
+      success: false,
+      error: 'Run not found.',
+    });
+    return;
+  }
+
+  if (run.status === 'running') {
+    res.status(409).json({
+      success: false,
+      error: 'Stop the active benchmark before deleting it.',
+    });
+    return;
+  }
+
+  removeRuns([run.id]);
+  const state = toPublicState();
+  broadcastState();
+  res.json({
+    success: true,
+    deletedRunId: run.id,
+    state,
+  });
+});
+
 app.get('/api/run/:id', (req, res) => {
   const run = getRun(req.params.id);
 
