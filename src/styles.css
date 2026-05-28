@@ -3185,7 +3185,12 @@ select:disabled {
   max-width: 100%;
   padding: 0.22rem 0.42rem 0.22rem 0.28rem;
   box-shadow: none;
+  color: rgba(251, 248, 241, 0.86);
   font-size: 0.68rem;
+}
+
+.comparison-source-badge span {
+  color: inherit;
 }
 
 .comparison-run-head .comparison-source-badge {
