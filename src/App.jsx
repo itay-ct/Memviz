@@ -1417,6 +1417,16 @@ function getP99LatencyValue(run) {
   );
 }
 
+function getP999LatencyValue(run) {
+  return getFinalLatencyValue(run.summary?.results?.totals?.p999Latency, null);
+}
+
+function getMaxLatencyValue(run) {
+  const latencySeries = getDisplaySeries(run, 'latency_ms');
+
+  return getFinalLatencyValue(run.summary?.results?.totals?.maxLatency, getSeriesPeak(latencySeries));
+}
+
 function buildPrimaryMetricItems(run) {
   const finalThroughput = getAverageThroughputValue(run);
   const finalP99 = getP99LatencyValue(run);
@@ -1449,6 +1459,8 @@ function buildAdvancedMetricItems(run) {
     summaryTotals?.p90Latency,
     getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
   );
+  const p999Latency = getP999LatencyValue(run);
+  const maxLatency = getMaxLatencyValue(run);
 
   const averageBandwidthDisplay =
     summaryTotals?.kbSec !== null && summaryTotals?.kbSec !== undefined
@@ -1495,6 +1507,14 @@ function buildAdvancedMetricItems(run) {
     {
       label: 'p99 latency',
       value: formatMetric(getP99LatencyValue(run), formatLatency),
+    },
+    {
+      label: 'p99.9 latency',
+      value: formatMetric(p999Latency, formatLatency),
+    },
+    {
+      label: 'Max latency',
+      value: formatMetric(maxLatency, formatLatency),
     },
     {
       label: 'Average bandwidth',
@@ -1597,6 +1617,18 @@ function buildLatencySummaryOptions(run) {
       value: getP99LatencyValue(run),
       formatter: formatLatency,
     },
+    {
+      key: 'p99.9',
+      label: 'p99.9',
+      value: getP999LatencyValue(run),
+      formatter: formatLatency,
+    },
+    {
+      key: 'max',
+      label: 'max',
+      value: getMaxLatencyValue(run),
+      formatter: formatLatency,
+    },
   ];
 }
 
@@ -1660,6 +1692,8 @@ function getComparisonSnapshot(run, draft) {
     p50Latency: getFinalLatencyValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
     p90Latency: getFinalLatencyValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
     p99Latency: getP99LatencyValue(run),
+    p999Latency: getP999LatencyValue(run),
+    maxLatency: getMaxLatencyValue(run),
     hitsSec: summaryTotals?.hitsSec ?? null,
     missesSec: summaryTotals?.missesSec ?? null,
     connectionErrors: run.metrics.connection_errors,
@@ -1753,6 +1787,14 @@ function buildComparisonRows(runsWithDrafts) {
     {
       label: 'p99 latency',
       values: snapshots.map((snapshot) => formatMetric(snapshot.p99Latency, formatLatency)),
+    },
+    {
+      label: 'p99.9 latency',
+      values: snapshots.map((snapshot) => formatMetric(snapshot.p999Latency, formatLatency)),
+    },
+    {
+      label: 'Max latency',
+      values: snapshots.map((snapshot) => formatMetric(snapshot.maxLatency, formatLatency)),
     },
     {
       label: 'Average bandwidth',
@@ -5274,7 +5316,14 @@ function MetricsPanel({ draft, run }) {
     ].includes(item.label),
   );
   const latencyAdvancedItems = advancedMetricItems.filter((item) =>
-    ['Average latency', 'p50 latency', 'p90 latency', 'p99 latency'].includes(item.label),
+    [
+      'Average latency',
+      'p50 latency',
+      'p90 latency',
+      'p99 latency',
+      'p99.9 latency',
+      'Max latency',
+    ].includes(item.label),
   );
   const connectionAdvancedItems = advancedMetricItems.filter((item) =>
     ['Connections', 'Peak connections', 'Connection errors'].includes(item.label),
