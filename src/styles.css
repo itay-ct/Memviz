@@ -1639,20 +1639,17 @@ select:disabled {
 }
 
 .advanced-mode-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 2rem;
   height: 2rem;
-  max-width: 8rem;
-  padding: 0 0.54rem;
+  padding: 0;
   border: 1px solid rgba(9, 26, 35, 0.08);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.72);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 700;
-  white-space: nowrap;
 }
 
 .advanced-mode-button:hover:not(:disabled),

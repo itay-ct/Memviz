@@ -4408,6 +4408,7 @@ function ScenarioCard({
               {!isLocked ? (
                 <>
                   <button
+                    aria-label="Advanced mode"
                     className="advanced-mode-button"
                     disabled={disabled}
                     onClick={(event) => {
@@ -4417,7 +4418,6 @@ function ScenarioCard({
                     title="Advanced mode"
                     type="button"
                   >
-                    <span>Advanced mode</span>
                     <PopOutIcon />
                   </button>
                   <button
