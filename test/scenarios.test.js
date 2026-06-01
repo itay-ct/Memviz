@@ -151,6 +151,33 @@ test('buildMemtierArgsFromConfig includes cluster mode flag when enabled', () =>
   ]);
 });
 
+test('buildMemtierArgsFromConfig includes advanced memtier parameters', () => {
+  const scenario = createScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {
+    memtierAdvanced: {
+      hideHistogram: { enabled: true },
+      printPercentiles: { enabled: true, value: '50,95,99,99.9' },
+      commandStatsBreakdown: { enabled: true, value: 'line' },
+      commands: { enabled: true, value: 'PING\nGET __key__' },
+      keyMaximum: { enabled: true, value: 1000 },
+    },
+  });
+
+  assert.deepEqual(buildMemtierArgsFromConfig(scenario, config).slice(-11), [
+    '--hide-histogram',
+    '--print-percentiles',
+    '50,95,99,99.9',
+    '--command-stats-breakdown',
+    'line',
+    '--command',
+    'PING',
+    '--command',
+    'GET __key__',
+    '--key-maximum',
+    '1000',
+  ]);
+});
+
 test('buildMemtierArgsFromConfig includes staircase args in order', () => {
   const scenario = createScenarioDefinition({
     staircaseEnabled: true,

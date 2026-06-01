@@ -2,9 +2,10 @@ import { spawn } from 'node:child_process';
 
 import { buildMemtierConnectionArgs, buildRedisUrl } from './redis-target.js';
 import { hasStaircaseProfile } from '../shared/scenario-load-profile.js';
+import { getEnabledMemtierAdvancedFlags } from '../shared/memtier-options.js';
 
 const DOCKER_IMAGE = 'redislabs/memtier_benchmark:latest';
-export const MEMTIER_REPO_URL = 'https://github.com/RedisLabs/memtier_benchmark';
+export const MEMTIER_REPO_URL = 'https://github.com/redis/memtier_benchmark';
 export const MIN_MEMTIER_VERSION = '2.3.0';
 
 export const STATSD_PORT = Number(
@@ -530,7 +531,9 @@ export async function resolveMemtierMetadata() {
 }
 
 export async function assertRuntimeSupportsScenario(runtime, scenario) {
-  if (!hasStaircaseProfile(scenario?.config)) {
+  const advancedFlags = getEnabledMemtierAdvancedFlags(scenario?.config?.memtierAdvanced);
+
+  if (!hasStaircaseProfile(scenario?.config) && !advancedFlags.length) {
     return;
   }
 
@@ -545,6 +548,14 @@ export async function assertRuntimeSupportsScenario(runtime, scenario) {
   if (!supportsStaircase) {
     throw new Error(
       'The selected Memtier runtime does not support staircase ramp-up flags yet. Update memtier_benchmark or use a newer Docker image.',
+    );
+  }
+
+  const unsupportedAdvancedFlags = advancedFlags.filter((flag) => !helpOutput.includes(flag));
+
+  if (unsupportedAdvancedFlags.length) {
+    throw new Error(
+      `The selected Memtier runtime does not support ${unsupportedAdvancedFlags.join(', ')}. Update memtier_benchmark or disable those advanced parameters.`,
     );
   }
 }

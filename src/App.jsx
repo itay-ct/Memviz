@@ -45,6 +45,10 @@ import {
   getDatabaseServiceLabel,
   normalizeDatabaseSource,
 } from '../shared/database-source.js';
+import {
+  MEMTIER_ADVANCED_OPTION_GROUPS,
+  countEnabledMemtierAdvancedOptions,
+} from '../shared/memtier-options.js';
 
 function CheckIcon() {
   return (
@@ -792,6 +796,8 @@ function describeScenarioShape(config) {
 }
 
 function describeDraftConfig(config) {
+  const advancedCount = countEnabledMemtierAdvancedOptions(config.memtierAdvanced);
+
   return [
     formatLoadProfileSummary(config),
     `${config.threads} threads`,
@@ -801,6 +807,7 @@ function describeDraftConfig(config) {
     `prefix ${formatKeyPrefixSummary(config)}`,
     describeScenarioShape(config),
     config.rateLimitEnabled ? `cap ${formatRateLimit(config.rateLimit)}` : null,
+    advancedCount ? `${advancedCount} advanced` : null,
   ]
     .filter(Boolean)
     .join(' • ');
@@ -3638,7 +3645,9 @@ function ConfigTable({
   config,
   disabled,
   onConfigChange,
+  onOpenMemtierAdvanced,
   scenario,
+  showAdvancedButton = true,
 }) {
   const isRequests = config.limitMode === 'requests';
   const runLimitField = isRequests ? 'requestCount' : 'testTime';
@@ -3654,6 +3663,19 @@ function ConfigTable({
     <div className="config-table-shell" onClick={(event) => event.stopPropagation()}>
       <table className="config-table-ui">
         <tbody>
+          {showAdvancedButton ? (
+            <ConfigRow label="Advanced">
+              <button
+                className="ghost-button config-advanced-button"
+                disabled={disabled}
+                onClick={onOpenMemtierAdvanced}
+                type="button"
+              >
+                All memtier parameters
+              </button>
+            </ConfigRow>
+          ) : null}
+
           <ConfigRow label="Run limit">
             <div className="config-composite-control config-composite-control-stacked">
               <ComboButton
@@ -3855,6 +3877,233 @@ function ConfigTable({
   );
 }
 
+function getMemtierAdvancedEntry(config, option) {
+  const entry = config?.memtierAdvanced?.[option.key];
+  if (entry) {
+    return entry;
+  }
+
+  return {
+    enabled: false,
+    value: option.defaultValue ?? '',
+  };
+}
+
+function buildNextMemtierAdvanced(config, option, nextEntry) {
+  const nextAdvanced = { ...(config.memtierAdvanced ?? {}) };
+
+  if (!nextEntry.enabled) {
+    delete nextAdvanced[option.key];
+    return nextAdvanced;
+  }
+
+  nextAdvanced[option.key] =
+    option.type === 'boolean'
+      ? { enabled: true }
+      : {
+          enabled: true,
+          value: nextEntry.value ?? option.defaultValue ?? '',
+        };
+
+  return nextAdvanced;
+}
+
+function AdvancedMemtierOptionControl({
+  config,
+  disabled,
+  onAdvancedChange,
+  option,
+}) {
+  const entry = getMemtierAdvancedEntry(config, option);
+  const enabled = Boolean(entry.enabled);
+  const value = entry.value ?? option.defaultValue ?? '';
+
+  function commit(nextEntry) {
+    onAdvancedChange(buildNextMemtierAdvanced(config, option, nextEntry));
+  }
+
+  if (option.type === 'boolean') {
+    return (
+      <label className={`advanced-option advanced-option-boolean ${enabled ? 'is-enabled' : ''}`}>
+        <input
+          checked={enabled}
+          disabled={disabled}
+          onChange={(event) => commit({ enabled: event.target.checked })}
+          type="checkbox"
+        />
+        <span>{option.label}</span>
+        <code>{option.flag}</code>
+      </label>
+    );
+  }
+
+  const inputDisabled = disabled || !enabled;
+
+  return (
+    <div className={`advanced-option ${enabled ? 'is-enabled' : ''}`.trim()}>
+      <label className="advanced-option-toggle">
+        <input
+          checked={enabled}
+          disabled={disabled}
+          onChange={(event) =>
+            commit({
+              enabled: event.target.checked,
+              value,
+            })
+          }
+          type="checkbox"
+        />
+        <span>{option.label}</span>
+        <code>{option.flag}</code>
+      </label>
+
+      {option.type === 'select' ? (
+        <select
+          disabled={inputDisabled}
+          onChange={(event) =>
+            commit({
+              enabled: true,
+              value: event.target.value,
+            })
+          }
+          value={value}
+        >
+          {option.choices.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      ) : option.type === 'multiline' ? (
+        <textarea
+          disabled={inputDisabled}
+          onChange={(event) =>
+            commit({
+              enabled: true,
+              value: event.target.value,
+            })
+          }
+          placeholder={option.placeholder ?? ''}
+          rows={3}
+          spellCheck={false}
+          value={value}
+        />
+      ) : (
+        <input
+          disabled={inputDisabled}
+          inputMode={option.type === 'text' ? undefined : 'numeric'}
+          min={option.min}
+          max={option.max}
+          onChange={(event) =>
+            commit({
+              enabled: true,
+              value: event.target.value,
+            })
+          }
+          placeholder={option.placeholder ?? option.defaultValue ?? ''}
+          step={option.type === 'integer' ? 1 : 'any'}
+          type={option.type === 'text' ? 'text' : 'number'}
+          value={value}
+        />
+      )}
+    </div>
+  );
+}
+
+function MemtierAdvancedModal({
+  config,
+  disabled,
+  onClose,
+  onConfigChange,
+  open,
+  scenario,
+}) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <section
+        aria-labelledby="memtier-advanced-title"
+        aria-modal="true"
+        className="memtier-advanced-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className="memtier-advanced-header">
+          <div>
+            <p className="eyebrow">Memtier</p>
+            <h2 id="memtier-advanced-title">Advanced parameters</h2>
+            <p className="dataset-modal-subtitle">
+              Core controls stay synchronized with the test card. Extra flags are appended to
+              the generated memtier command and checked against the active runtime before launch.
+            </p>
+          </div>
+          <button className="ghost-button" onClick={onClose} type="button">
+            Close
+          </button>
+        </header>
+
+        <div className="memtier-advanced-body">
+          <section className="advanced-option-group advanced-option-group-core">
+            <div className="advanced-option-group-head">
+              <h3>Core benchmark</h3>
+              <span>Always active</span>
+            </div>
+            <ConfigTable
+              config={config}
+              disabled={disabled}
+              onConfigChange={onConfigChange}
+              scenario={scenario}
+              showAdvancedButton={false}
+            />
+          </section>
+
+          {MEMTIER_ADVANCED_OPTION_GROUPS.map((group) => (
+            <section className="advanced-option-group" key={group.id}>
+              <div className="advanced-option-group-head">
+                <h3>{group.title}</h3>
+                <span>{group.options.length} options</span>
+              </div>
+              <div className="advanced-option-grid">
+                {group.options.map((option) => (
+                  <AdvancedMemtierOptionControl
+                    config={config}
+                    disabled={disabled}
+                    key={option.key}
+                    onAdvancedChange={(nextAdvanced) =>
+                      onConfigChange('memtierAdvanced', nextAdvanced)
+                    }
+                    option={option}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function RunLimitField({
   config,
   disabled,
@@ -3993,6 +4242,7 @@ function ScenarioCard({
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(getDraftName(draft, scenario));
   const [showRunMenu, setShowRunMenu] = useState(false);
+  const [showMemtierAdvanced, setShowMemtierAdvanced] = useState(false);
   const title = getDraftName(draft, scenario);
   const titleEditorRef = useRef(null);
 
@@ -4031,6 +4281,7 @@ function ScenarioCard({
   useEffect(() => {
     if (disabled || compareMode || isLocked) {
       setShowRunMenu(false);
+      setShowMemtierAdvanced(false);
     }
   }, [compareMode, disabled, isLocked]);
 
@@ -4230,9 +4481,19 @@ function ScenarioCard({
           config={config}
           disabled={disabled}
           onConfigChange={(field, nextValue) => onConfigChange(draft.id, field, nextValue)}
+          onOpenMemtierAdvanced={() => setShowMemtierAdvanced(true)}
           scenario={scenario}
         />
       ) : null}
+
+      <MemtierAdvancedModal
+        config={config}
+        disabled={disabled}
+        onClose={() => setShowMemtierAdvanced(false)}
+        onConfigChange={(field, nextValue) => onConfigChange(draft.id, field, nextValue)}
+        open={showMemtierAdvanced}
+        scenario={scenario}
+      />
 
       {isRunning ? (
         <div className="scenario-progress-block">

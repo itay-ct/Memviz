@@ -3,6 +3,11 @@ import {
   formatLoadProfileSummary,
   hasStaircaseProfile,
 } from '../shared/scenario-load-profile.js';
+import {
+  buildMemtierAdvancedArgs,
+  countEnabledMemtierAdvancedOptions,
+  normalizeMemtierAdvancedOptions,
+} from '../shared/memtier-options.js';
 
 function formatCompactInteger(value) {
   if (value >= 1000000) {
@@ -73,6 +78,7 @@ function scenarioDescription(config, kind) {
   const rateLimitLabel = config.rateLimitEnabled
     ? `cap ${formatCompactInteger(config.rateLimit)}/s`
     : null;
+  const advancedOptionCount = countEnabledMemtierAdvancedOptions(config.memtierAdvanced);
 
   const shapeLabel =
     kind === 'command'
@@ -89,6 +95,7 @@ function scenarioDescription(config, kind) {
     `prefix ${config.keyPrefix}`,
     shapeLabel,
     rateLimitLabel,
+    advancedOptionCount ? `${advancedOptionCount} advanced memtier` : null,
   ]
     .filter(Boolean)
     .join(' • ');
@@ -302,6 +309,9 @@ export function normalizeScenarioDefinition(input = {}) {
     rateLimit: normalizeInteger(rawDefaults.rateLimit, 20000),
     pipeline: normalizeInteger(rawDefaults.pipeline, 1),
     keyPrefix: requireNonEmptyString(rawDefaults.keyPrefix ?? 'memtier-', 'Key prefix is required.'),
+    memtierAdvanced: normalizeMemtierAdvancedOptions(
+      rawDefaults.memtierAdvanced ?? rawDefaults.memtier_advanced ?? {},
+    ),
   };
 
   if (kind === 'command') {
@@ -352,6 +362,9 @@ export function normalizeScenarioConfig(scenario, input = {}) {
       scenario.defaults.rateLimitEnabled ?? false,
     ),
     keyPrefix: normalizeString(input.keyPrefix, scenario.defaults.keyPrefix).trim(),
+    memtierAdvanced: normalizeMemtierAdvancedOptions(
+      input.memtierAdvanced ?? input.memtier_advanced ?? scenario.defaults.memtierAdvanced ?? {},
+    ),
   };
 
   if (scenario.kind === 'command') {
@@ -437,6 +450,8 @@ export function buildMemtierArgsFromConfig(scenario, config) {
   if (config.rateLimitEnabled) {
     args.push('--rate-limiting', String(config.rateLimit));
   }
+
+  args.push(...buildMemtierAdvancedArgs(config.memtierAdvanced));
 
   return args;
 }

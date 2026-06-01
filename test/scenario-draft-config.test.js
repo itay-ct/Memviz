@@ -70,6 +70,23 @@ test('toggling cluster mode updates the draft config', () => {
   assert.equal(nextConfig.clusterModeEnabled, true);
 });
 
+test('updating memtier advanced options preserves structured entries', () => {
+  const nextConfig = applyScenarioDraftConfigChange(
+    {
+      memtierAdvanced: {},
+    },
+    scenario,
+    'memtierAdvanced',
+    {
+      hideHistogram: { enabled: true },
+    },
+  );
+
+  assert.deepEqual(nextConfig.memtierAdvanced, {
+    hideHistogram: { enabled: true },
+  });
+});
+
 test('shrinking final clients keeps staircase start below target', () => {
   const nextConfig = applyScenarioDraftConfigChange(
     {
