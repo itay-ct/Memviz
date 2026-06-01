@@ -2781,7 +2781,7 @@ select:disabled {
 }
 
 .scenario-source-badge {
-  justify-self: end;
+  justify-self: center;
   max-width: 100%;
 }
 
