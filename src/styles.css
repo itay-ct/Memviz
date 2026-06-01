@@ -1573,7 +1573,7 @@ select:disabled {
   width: 100%;
   min-width: 0;
   overflow: visible;
-  padding: 1.1rem 1.1rem 3.05rem;
+  padding: 1.1rem;
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(9, 26, 35, 0.08);
@@ -2781,10 +2781,8 @@ select:disabled {
 }
 
 .scenario-source-badge {
-  position: absolute;
-  right: 1.1rem;
-  bottom: 1.05rem;
-  max-width: calc(100% - 2.2rem);
+  justify-self: end;
+  max-width: 100%;
 }
 
 .scenario-result-stats {
