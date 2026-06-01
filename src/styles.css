@@ -2219,12 +2219,16 @@ select:disabled {
   flex-wrap: wrap;
 }
 
+.memtier-advanced-scrim {
+  padding: 0.9rem;
+}
+
 .memtier-advanced-modal {
-  width: min(1180px, 100%);
-  max-height: min(90vh, 920px);
+  width: min(1680px, calc(100vw - 1.8rem));
+  height: min(940px, calc(100vh - 1.8rem));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  border-radius: 28px;
+  border-radius: 24px;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(9, 26, 35, 0.08);
   box-shadow: 0 30px 70px rgba(9, 26, 35, 0.2);
@@ -2250,7 +2254,10 @@ select:disabled {
   overflow: auto;
   padding: 1.1rem 1.3rem 1.3rem;
   display: grid;
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  align-content: start;
+  align-items: start;
+  gap: 0.9rem;
 }
 
 .advanced-option-group {
@@ -2262,6 +2269,10 @@ select:disabled {
 
 .advanced-option-group-core .config-table-shell {
   margin-top: 0.75rem;
+}
+
+.advanced-option-group-core {
+  grid-column: 1 / -1;
 }
 
 .advanced-option-group-head {
@@ -2287,7 +2298,7 @@ select:disabled {
 
 .advanced-option-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 0.62rem;
   margin-top: 0.75rem;
 }
@@ -3661,6 +3672,10 @@ select:disabled {
     align-items: flex-start;
   }
 
+  .memtier-advanced-body {
+    grid-template-columns: 1fr;
+  }
+
   .setup-panel-head,
   .setup-progress-header,
   .setup-summary {
@@ -3751,6 +3766,25 @@ select:disabled {
   }
 
   .scenario-tuning-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .memtier-advanced-scrim {
+    padding: 0.4rem;
+  }
+
+  .memtier-advanced-modal {
+    width: calc(100vw - 0.8rem);
+    height: calc(100vh - 0.8rem);
+    border-radius: 18px;
+  }
+
+  .memtier-advanced-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .advanced-option-grid {
     grid-template-columns: 1fr;
   }
 

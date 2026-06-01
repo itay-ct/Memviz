@@ -4048,7 +4048,7 @@ function MemtierAdvancedModal({
   }
 
   return (
-    <div className="modal-scrim" onClick={onClose}>
+    <div className="modal-scrim memtier-advanced-scrim" onClick={onClose}>
       <section
         aria-labelledby="memtier-advanced-title"
         aria-modal="true"
