@@ -87,29 +87,6 @@ function WarningIcon() {
   );
 }
 
-function PopOutIcon() {
-  return (
-    <svg aria-hidden="true" className="popout-icon" viewBox="0 0 16 16">
-      <path
-        d="M6.2 3.2H3.8c-.7 0-1.2.5-1.2 1.2v7.8c0 .7.5 1.2 1.2 1.2h7.8c.7 0 1.2-.5 1.2-1.2V9.8"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.6"
-      />
-      <path
-        d="M9.1 2.6h4.3v4.3M8.2 7.8l5-5"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.6"
-      />
-    </svg>
-  );
-}
-
 function RunningIndicator() {
   return (
     <span aria-label="Running" className="scenario-running-indicator" role="status">
@@ -4249,7 +4226,6 @@ function ScenarioCard({
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(getDraftName(draft, scenario));
   const [showRunMenu, setShowRunMenu] = useState(false);
-  const [showMemtierAdvanced, setShowMemtierAdvanced] = useState(false);
   const title = getDraftName(draft, scenario);
   const titleEditorRef = useRef(null);
 
@@ -4288,7 +4264,6 @@ function ScenarioCard({
   useEffect(() => {
     if (disabled || compareMode || isLocked) {
       setShowRunMenu(false);
-      setShowMemtierAdvanced(false);
     }
   }, [compareMode, disabled, isLocked]);
 
@@ -4409,19 +4384,6 @@ function ScenarioCard({
             {!isLocked ? (
               <>
                 <button
-                  aria-label="Advanced mode"
-                  className="advanced-mode-button"
-                  disabled={disabled}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setShowMemtierAdvanced(true);
-                  }}
-                  title="Advanced mode"
-                  type="button"
-                >
-                  <PopOutIcon />
-                </button>
-                <button
                   className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
                   disabled={disabled}
                   onClick={(event) => {
@@ -4504,15 +4466,6 @@ function ScenarioCard({
           scenario={scenario}
         />
       ) : null}
-
-      <MemtierAdvancedModal
-        config={config}
-        disabled={disabled}
-        onClose={() => setShowMemtierAdvanced(false)}
-        onConfigChange={(field, nextValue) => onConfigChange(draft.id, field, nextValue)}
-        open={showMemtierAdvanced}
-        scenario={scenario}
-      />
 
       {isRunning ? (
         <div className="scenario-progress-block">
