@@ -87,6 +87,29 @@ function WarningIcon() {
   );
 }
 
+function PopOutIcon() {
+  return (
+    <svg aria-hidden="true" className="popout-icon" viewBox="0 0 16 16">
+      <path
+        d="M6.2 3.2H3.8c-.7 0-1.2.5-1.2 1.2v7.8c0 .7.5 1.2 1.2 1.2h7.8c.7 0 1.2-.5 1.2-1.2V9.8"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M9.1 2.6h4.3v4.3M8.2 7.8l5-5"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
+}
+
 function RunningIndicator() {
   return (
     <span aria-label="Running" className="scenario-running-indicator" role="status">
@@ -3645,9 +3668,7 @@ function ConfigTable({
   config,
   disabled,
   onConfigChange,
-  onOpenMemtierAdvanced,
   scenario,
-  showAdvancedButton = true,
 }) {
   const isRequests = config.limitMode === 'requests';
   const runLimitField = isRequests ? 'requestCount' : 'testTime';
@@ -3663,19 +3684,6 @@ function ConfigTable({
     <div className="config-table-shell" onClick={(event) => event.stopPropagation()}>
       <table className="config-table-ui">
         <tbody>
-          {showAdvancedButton ? (
-            <ConfigRow label="Advanced">
-              <button
-                className="ghost-button config-advanced-button"
-                disabled={disabled}
-                onClick={onOpenMemtierAdvanced}
-                type="button"
-              >
-                All memtier parameters
-              </button>
-            </ConfigRow>
-          ) : null}
-
           <ConfigRow label="Run limit">
             <div className="config-composite-control config-composite-control-stacked">
               <ComboButton
@@ -4073,7 +4081,6 @@ function MemtierAdvancedModal({
               disabled={disabled}
               onConfigChange={onConfigChange}
               scenario={scenario}
-              showAdvancedButton={false}
             />
           </section>
 
@@ -4401,6 +4408,19 @@ function ScenarioCard({
               {!isLocked ? (
                 <>
                   <button
+                    className="advanced-mode-button"
+                    disabled={disabled}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setShowMemtierAdvanced(true);
+                    }}
+                    title="Advanced mode"
+                    type="button"
+                  >
+                    <span>Advanced mode</span>
+                    <PopOutIcon />
+                  </button>
+                  <button
                     className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
                     disabled={disabled}
                     onClick={(event) => {
@@ -4481,7 +4501,6 @@ function ScenarioCard({
           config={config}
           disabled={disabled}
           onConfigChange={(field, nextValue) => onConfigChange(draft.id, field, nextValue)}
-          onOpenMemtierAdvanced={() => setShowMemtierAdvanced(true)}
           scenario={scenario}
         />
       ) : null}
