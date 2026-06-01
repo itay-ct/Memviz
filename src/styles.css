@@ -1596,10 +1596,6 @@ select:disabled {
 }
 
 .scenario-card-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: flex-start;
-  gap: 1rem;
   min-width: 0;
 }
 
@@ -1607,8 +1603,9 @@ select:disabled {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
+  justify-content: flex-start;
   flex-shrink: 0;
-  margin-left: auto;
+  margin-top: -0.35rem;
 }
 
 .edit-toggle {

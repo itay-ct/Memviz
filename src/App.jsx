@@ -4373,127 +4373,127 @@ function ScenarioCard({
             ) : null}
           </div>
         </div>
+      </div>
 
-        <div className="scenario-actions" onClick={(event) => event.stopPropagation()}>
-          {compareMode ? (
-            isLocked && run?.status === 'completed' ? (
-              <label className={`compare-check ${compareSelected ? 'is-selected' : ''}`}>
-                <input
-                  checked={compareSelected}
-                  disabled={compareSelectionDisabled}
-                  onChange={() => onToggleCompareSelection(run.id)}
-                  type="checkbox"
-                />
-                <span />
-              </label>
-            ) : null
-          ) : (
-            <>
-              {!isRunning ? (
+      <div className="scenario-actions" onClick={(event) => event.stopPropagation()}>
+        {compareMode ? (
+          isLocked && run?.status === 'completed' ? (
+            <label className={`compare-check ${compareSelected ? 'is-selected' : ''}`}>
+              <input
+                checked={compareSelected}
+                disabled={compareSelectionDisabled}
+                onChange={() => onToggleCompareSelection(run.id)}
+                type="checkbox"
+              />
+              <span />
+            </label>
+          ) : null
+        ) : (
+          <>
+            {!isRunning ? (
+              <button
+                aria-label={`Delete ${title}`}
+                className="delete-test-button"
+                disabled={disabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete(draft.id);
+                }}
+                title="Delete test"
+                type="button"
+              >
+                <TrashIcon />
+              </button>
+            ) : null}
+
+            {!isLocked ? (
+              <>
                 <button
-                  aria-label={`Delete ${title}`}
-                  className="delete-test-button"
+                  aria-label="Advanced mode"
+                  className="advanced-mode-button"
                   disabled={disabled}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onDelete(draft.id);
+                    setShowMemtierAdvanced(true);
                   }}
-                  title="Delete test"
+                  title="Advanced mode"
                   type="button"
                 >
-                  <TrashIcon />
+                  <PopOutIcon />
                 </button>
-              ) : null}
-
-              {!isLocked ? (
-                <>
-                  <button
-                    aria-label="Advanced mode"
-                    className="advanced-mode-button"
-                    disabled={disabled}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setShowMemtierAdvanced(true);
-                    }}
-                    title="Advanced mode"
-                    type="button"
-                  >
-                    <PopOutIcon />
-                  </button>
-                  <button
-                    className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
-                    disabled={disabled}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleCustomize(draft.id);
-                    }}
-                    type="button"
-                  >
-                    <IconAsset className="button-icon" src={settingsIconMidnight} />
-                  </button>
-                  <div className="play-menu-wrap">
-                    <button
-                      className="play-button"
-                      disabled={disabled}
-                      onClick={() => {
-                        if (connectionCount <= 1) {
-                          onRun(draft.id, 'selected');
-                          return;
-                        }
-
-                        setShowRunMenu((open) => !open);
-                      }}
-                      type="button"
-                    >
-                      {isLaunching ? '…' : '▶'}
-                    </button>
-
-                    {showRunMenu && connectionCount > 1 ? (
-                      <div className="play-menu">
-                        <button
-                          className="play-menu-option"
-                          onClick={() => {
-                            setShowRunMenu(false);
-                            onRun(draft.id, 'selected');
-                          }}
-                          type="button"
-                        >
-                          {`Run on ${selectedConnectionName ?? 'selected connection'}`}
-                        </button>
-                        <button
-                          className="play-menu-option"
-                          onClick={() => {
-                            setShowRunMenu(false);
-                            onRun(draft.id, 'all');
-                          }}
-                          type="button"
-                        >
-                          Run on all connections
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                </>
-              ) : isRunning ? (
                 <button
-                  className="running-control"
+                  className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
+                  disabled={disabled}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onCancelRun();
+                    onToggleCustomize(draft.id);
                   }}
                   type="button"
                 >
-                  <RunningIndicator />
-                  <span className="stop-run-button">■</span>
+                  <IconAsset className="button-icon" src={settingsIconMidnight} />
                 </button>
-              ) : run?.status !== 'completed' ? (
-                <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
-                  {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
-                </span>
-              ) : null}
-            </>
-          )}
-        </div>
+                <div className="play-menu-wrap">
+                  <button
+                    className="play-button"
+                    disabled={disabled}
+                    onClick={() => {
+                      if (connectionCount <= 1) {
+                        onRun(draft.id, 'selected');
+                        return;
+                      }
+
+                      setShowRunMenu((open) => !open);
+                    }}
+                    type="button"
+                  >
+                    {isLaunching ? '…' : '▶'}
+                  </button>
+
+                  {showRunMenu && connectionCount > 1 ? (
+                    <div className="play-menu">
+                      <button
+                        className="play-menu-option"
+                        onClick={() => {
+                          setShowRunMenu(false);
+                          onRun(draft.id, 'selected');
+                        }}
+                        type="button"
+                      >
+                        {`Run on ${selectedConnectionName ?? 'selected connection'}`}
+                      </button>
+                      <button
+                        className="play-menu-option"
+                        onClick={() => {
+                          setShowRunMenu(false);
+                          onRun(draft.id, 'all');
+                        }}
+                        type="button"
+                      >
+                        Run on all connections
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : isRunning ? (
+              <button
+                className="running-control"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCancelRun();
+                }}
+                type="button"
+              >
+                <RunningIndicator />
+                <span className="stop-run-button">■</span>
+              </button>
+            ) : run?.status !== 'completed' ? (
+              <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
+                {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
+              </span>
+            ) : null}
+          </>
+        )}
       </div>
 
       {isCustomizing && !isLocked ? (
