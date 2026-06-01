@@ -21,7 +21,13 @@ export function applyScenarioDraftConfigChange(config, scenario, field, nextValu
     };
   }
 
-  if (field === 'rateLimitEnabled' || field === 'command' || field === 'keyPrefix') {
+  if (
+    field === 'rateLimitEnabled' ||
+    field === 'clusterModeEnabled' ||
+    field === 'command' ||
+    field === 'keyPrefix' ||
+    field === 'memtierAdvanced'
+  ) {
     return {
       ...config,
       [field]: nextValue,

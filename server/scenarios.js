@@ -3,6 +3,11 @@ import {
   formatLoadProfileSummary,
   hasStaircaseProfile,
 } from '../shared/scenario-load-profile.js';
+import {
+  buildMemtierAdvancedArgs,
+  countEnabledMemtierAdvancedOptions,
+  normalizeMemtierAdvancedOptions,
+} from '../shared/memtier-options.js';
 
 function formatCompactInteger(value) {
   if (value >= 1000000) {
@@ -73,6 +78,7 @@ function scenarioDescription(config, kind) {
   const rateLimitLabel = config.rateLimitEnabled
     ? `cap ${formatCompactInteger(config.rateLimit)}/s`
     : null;
+  const advancedOptionCount = countEnabledMemtierAdvancedOptions(config.memtierAdvanced);
 
   const shapeLabel =
     kind === 'command'
@@ -85,9 +91,11 @@ function scenarioDescription(config, kind) {
     `${config.threads} threads`,
     durationLabel,
     `pipe ${config.pipeline}`,
+    config.clusterModeEnabled ? 'cluster aware' : null,
     `prefix ${config.keyPrefix}`,
     shapeLabel,
     rateLimitLabel,
+    advancedOptionCount ? `${advancedOptionCount} advanced memtier` : null,
   ]
     .filter(Boolean)
     .join(' • ');
@@ -293,10 +301,17 @@ export function normalizeScenarioDefinition(input = {}) {
       rawDefaults.staircaseEnabled ?? rawDefaults.staircase_enabled,
       false,
     ),
+    clusterModeEnabled: normalizeBoolean(
+      rawDefaults.clusterModeEnabled ?? rawDefaults.cluster_mode_enabled,
+      false,
+    ),
     rateLimitEnabled: normalizeBoolean(rawDefaults.rateLimitEnabled, false),
     rateLimit: normalizeInteger(rawDefaults.rateLimit, 20000),
     pipeline: normalizeInteger(rawDefaults.pipeline, 1),
     keyPrefix: requireNonEmptyString(rawDefaults.keyPrefix ?? 'memtier-', 'Key prefix is required.'),
+    memtierAdvanced: normalizeMemtierAdvancedOptions(
+      rawDefaults.memtierAdvanced ?? rawDefaults.memtier_advanced ?? {},
+    ),
   };
 
   if (kind === 'command') {
@@ -338,11 +353,18 @@ export function normalizeScenarioConfig(scenario, input = {}) {
       input.staircaseEnabled ?? input.staircase_enabled,
       scenario.defaults.staircaseEnabled ?? false,
     ),
+    clusterModeEnabled: normalizeBoolean(
+      input.clusterModeEnabled ?? input.cluster_mode_enabled,
+      scenario.defaults.clusterModeEnabled ?? false,
+    ),
     rateLimitEnabled: normalizeBoolean(
       input.rateLimitEnabled,
       scenario.defaults.rateLimitEnabled ?? false,
     ),
     keyPrefix: normalizeString(input.keyPrefix, scenario.defaults.keyPrefix).trim(),
+    memtierAdvanced: normalizeMemtierAdvancedOptions(
+      input.memtierAdvanced ?? input.memtier_advanced ?? scenario.defaults.memtierAdvanced ?? {},
+    ),
   };
 
   if (scenario.kind === 'command') {
@@ -393,6 +415,10 @@ export function buildMemtierArgsFromConfig(scenario, config) {
     config.keyPrefix,
   ];
 
+  if (config.clusterModeEnabled) {
+    args.push('--cluster-mode');
+  }
+
   if (scenario.kind === 'command') {
     args.push('--command', config.command, '--command-stats-breakdown', 'line');
   } else {
@@ -424,6 +450,8 @@ export function buildMemtierArgsFromConfig(scenario, config) {
   if (config.rateLimitEnabled) {
     args.push('--rate-limiting', String(config.rateLimit));
   }
+
+  args.push(...buildMemtierAdvancedArgs(config.memtierAdvanced));
 
   return args;
 }

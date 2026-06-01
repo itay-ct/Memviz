@@ -19,6 +19,10 @@ import {
 import { buildRedisUrl, normalizeRedisTarget } from './redis-target.js';
 import { buildRunnableScenario } from './scenarios.js';
 import {
+  DEFAULT_DATABASE_ENGINE,
+  DEFAULT_DATABASE_SERVICE,
+} from '../shared/database-source.js';
+import {
   appendLog,
   clearRuns,
   createConnection,
@@ -55,6 +59,7 @@ import {
   STATSD_HOST,
   STATSD_PORT,
 } from './memtier.js';
+import { parseMemtierProgressPercent } from './memtier-summary.js';
 import {
   createRedisInsightProxyHandler,
   createRedisInsightService,
@@ -76,7 +81,7 @@ const REDIS_CONNECT_TIMEOUT_MS = 3000;
 const APP_VERSION = '1.3.1';
 const APP_PORT = Number(process.env.PORT ?? 3000);
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
-const MAX_CONNECTIONS = 3;
+const MAX_CONNECTIONS = 4;
 const DEFAULT_REDIS_HOST = process.env.MEMVIZ_DEFAULT_REDIS_HOST ?? '127.0.0.1';
 const DEFAULT_REDIS_PORT = process.env.MEMVIZ_DEFAULT_REDIS_PORT ?? '6379';
 const REDISINSIGHT_CONFIG = getRedisInsightConfig(process.env);
@@ -99,6 +104,11 @@ const FATAL_MEMTIER_PATTERNS = [
     regex: /syntax error at offset/i,
     message: (line) =>
       `Redis rejected the benchmark command syntax: ${line}. This usually means the query syntax or index field type does not match the benchmark command.`,
+  },
+  {
+    regex: /cluster slot failed/i,
+    message: (line) =>
+      `Cluster Aware requires a Redis Cluster target. Memtier could not read cluster slots from Redis: ${line}`,
   },
 ];
 
@@ -176,6 +186,33 @@ function classifyFatalMemtierLine(text) {
   }
 
   return null;
+}
+
+function recordMemtierProgressLine(runId, text) {
+  const progressPercent = parseMemtierProgressPercent(text);
+  if (progressPercent === null) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const run = recordMetric(runId, {
+    metric: 'progress_pct',
+    value: progressPercent,
+    timestamp,
+  });
+  if (!run) {
+    return;
+  }
+
+  broadcast({
+    type: 'metric',
+    runId,
+    metric: 'progress_pct',
+    value: progressPercent,
+    metrics: run.metrics,
+    series: run.series,
+    timestamp,
+  });
 }
 
 async function verifyRedisConnection(target) {
@@ -269,6 +306,10 @@ async function bootstrapDefaultConnectionIfAvailable() {
       id: randomUUID(),
       name: DEFAULT_TARGET_NAME,
       target,
+      databaseSource: {
+        engine: DEFAULT_DATABASE_ENGINE,
+        service: DEFAULT_DATABASE_SERVICE,
+      },
     });
     broadcastState();
     void startConnectionRttProbe(connection.id);
@@ -773,6 +814,10 @@ app.post('/api/connect', async (req, res) => {
       id: randomUUID(),
       name: req.body?.name,
       target,
+      databaseSource: {
+        engine: req.body?.engine,
+        service: req.body?.service,
+      },
     });
 
     const state = toPublicState();
@@ -1096,6 +1141,9 @@ app.post('/api/run', async (req, res) => {
         if (stream === 'stdout') {
           recordSummaryLine(runId, text);
         }
+        if (stream === 'stderr' && !fatalAbortMessage) {
+          recordMemtierProgressLine(runId, text);
+        }
         if (entry) {
           broadcast({
             type: 'log',
@@ -1215,6 +1263,35 @@ app.post('/api/run/cancel', async (_req, res) => {
     success: true,
     canceledRunIds: runIds,
     state: toPublicState(),
+  });
+});
+
+app.delete('/api/run/:id', (req, res) => {
+  const run = getRun(req.params.id);
+
+  if (!run) {
+    res.status(404).json({
+      success: false,
+      error: 'Run not found.',
+    });
+    return;
+  }
+
+  if (run.status === 'running') {
+    res.status(409).json({
+      success: false,
+      error: 'Stop the active benchmark before deleting it.',
+    });
+    return;
+  }
+
+  removeRuns([run.id]);
+  const state = toPublicState();
+  broadcastState();
+  res.json({
+    success: true,
+    deletedRunId: run.id,
+    state,
   });
 });
 

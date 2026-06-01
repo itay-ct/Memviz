@@ -1,5 +1,6 @@
 import { buildRedisInsightUrl, serializeConnectionTarget } from './redis-target.js';
 import { applySummaryLine, createEmptySummary } from './memtier-summary.js';
+import { normalizeDatabaseSource } from '../shared/database-source.js';
 
 const MAX_SERIES_POINTS = 240;
 const MAX_LOG_LINES = 600;
@@ -61,6 +62,7 @@ function serializeConnection(connection) {
     createdAt: connection.createdAt,
     rttMs: connection.rttMs ?? null,
     rttWarning: Boolean(connection.rttWarning),
+    databaseSource: normalizeDatabaseSource(connection.databaseSource),
     redisInsightUrl: buildRedisInsightUrl(connection.target, {
       databaseAlias: connection.name,
     }),
@@ -85,11 +87,12 @@ function recordSeriesPoint(series, point) {
   }
 }
 
-export function createConnection({ id, name, target }) {
+export function createConnection({ databaseSource = {}, id, name, target }) {
   const connection = {
     id,
     name: sanitizeName(name, target.summary),
     target,
+    databaseSource: normalizeDatabaseSource(databaseSource),
     createdAt: new Date().toISOString(),
     rttMs: null,
     rttWarning: false,
@@ -275,6 +278,7 @@ export function createRun({ command, connection, displayName = null, id, label, 
     scenarioConfig: { ...scenario.config },
     connectionId: connection.id,
     connectionName: connection.name,
+    databaseSource: normalizeDatabaseSource(connection.databaseSource),
     target: serializeConnectionTarget(connection.target),
     status: 'running',
     createdAt: timestamp,
@@ -337,8 +341,22 @@ export function recordMetric(runId, { metric, value, timestamp }) {
     return run;
   }
 
+  if (
+    metric.startsWith('latency_') &&
+    value === 0 &&
+    run.metrics[metric] !== null &&
+    run.metrics[metric] > 0
+  ) {
+    return run;
+  }
+
   if (metric === 'progress_pct') {
-    run.metrics.progress_pct = Math.max(0, Math.min(100, value));
+    if (run.status !== 'running') {
+      return run;
+    }
+
+    const nextProgress = Math.max(0, Math.min(100, value));
+    run.metrics.progress_pct = Math.max(run.metrics.progress_pct, nextProgress);
   } else if (metric === 'connection_errors') {
     run.metrics.connection_errors = value;
   } else {
@@ -396,6 +414,7 @@ export function serializeRun(run, { includeLogs = true } = {}) {
     scenarioConfig: { ...run.scenarioConfig },
     connectionId: run.connectionId,
     connectionName: run.connectionName,
+    databaseSource: normalizeDatabaseSource(run.databaseSource),
     target: run.target,
     status: run.status,
     createdAt: run.createdAt,

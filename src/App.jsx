@@ -38,6 +38,17 @@ import {
   getReachedClientsPerThreadAtTime,
   hasStaircaseProfile,
 } from '../shared/scenario-load-profile.js';
+import {
+  DATABASE_ENGINE_OPTIONS,
+  DATABASE_SERVICE_OPTIONS,
+  getDatabaseEngineLabel,
+  getDatabaseServiceLabel,
+  normalizeDatabaseSource,
+} from '../shared/database-source.js';
+import {
+  MEMTIER_ADVANCED_OPTION_GROUPS,
+  countEnabledMemtierAdvancedOptions,
+} from '../shared/memtier-options.js';
 
 function CheckIcon() {
   return (
@@ -95,11 +106,70 @@ function MoreIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="trash-icon" viewBox="0 0 16 16">
+      <path
+        d="M5.25 4.25V3.4c0-.7.48-1.15 1.2-1.15h3.1c.72 0 1.2.45 1.2 1.15v.85"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M3.35 4.45h9.3M4.55 6l.45 6.15c.05.78.55 1.2 1.3 1.2h3.4c.75 0 1.25-.42 1.3-1.2L11.45 6"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M6.85 7.05v4.05M9.15 7.05v4.05"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+    </svg>
+  );
+}
+
+function RedisStackIcon() {
+  return (
+    <svg aria-hidden="true" className="source-engine-icon source-engine-icon-redis" viewBox="0 0 20 20">
+      <path className="redis-stack-layer redis-stack-bottom" d="M2 13.1 10 9.25 18 13.1 10 17.35Z" />
+      <path className="redis-stack-layer redis-stack-middle" d="M2 10.15 10 6.3 18 10.15 10 14.4Z" />
+      <path className="redis-stack-layer redis-stack-top" d="M2 7.1 10 3.15 18 7.1 10 11.35Z" />
+      <ellipse className="redis-stack-cutout" cx="6.9" cy="7" rx="2.2" ry="0.86" />
+      <path className="redis-stack-cutout" d="M10.6 4.5 11.3 5.95 12.9 6.1 11.7 7.15 12.05 8.65 10.6 7.85 9.2 8.65 9.5 7.15 8.35 6.1 9.95 5.95Z" />
+      <path className="redis-stack-cutout" d="M8.4 8.9 12.85 7.9 11.2 10.6Z" />
+      <path className="redis-stack-shadow" d="M13.05 6.65 15.65 7.65 13.1 8.75 10.5 7.75Z" />
+    </svg>
+  );
+}
+
+function ValkeySymbolIcon() {
+  return (
+    <svg aria-hidden="true" className="source-engine-icon source-engine-icon-valkey" viewBox="0 0 20 20">
+      <path
+        className="valkey-mark"
+        d="M10 1.15 17.35 5.4v9.2L10 18.85 2.65 14.6V5.4L10 1.15Zm0 3.1L5.55 6.8v5.75l2.45 1.4v-2.8l-1.2-.68V8.28L10 6.42l3.2 1.86v3.52l-2.16 1.24v2.8l3.4-1.96V6.8L10 4.25Z"
+      />
+      <circle className="valkey-cutout" cx="10" cy="9.95" r="1.55" />
+      <path className="valkey-mark" d="M7.98 10.45 10.35 11.8v5.72L7.98 16.15Z" />
+    </svg>
+  );
+}
+
 const DEFAULT_FORM = {
   hostOrUrl: '127.0.0.1',
   port: '6379',
   username: 'default',
   password: '',
+  engine: '',
+  service: '',
 };
 
 const BLANK_CONNECTION_FORM = {
@@ -107,6 +177,8 @@ const BLANK_CONNECTION_FORM = {
   port: '',
   username: '',
   password: '',
+  engine: '',
+  service: '',
 };
 
 const EMPTY_APP_STATE = {
@@ -153,7 +225,11 @@ const EMPTY_SETUP_STATE = {
   logs: [],
 };
 
-const COMPARE_CHART_COLORS = ['#81DBFF', '#C895E3', '#DDFF21'];
+const COMPARE_ENGINE_COLORS = {
+  redis: ['#FF4438', '#FF9F1C', '#F72585', '#FFD166'],
+  valkey: ['#667EFF', '#00C2FF', '#B967FF', '#2DD4BF'],
+};
+const COMPARE_FALLBACK_COLORS = ['#81DBFF', '#C895E3', '#DDFF21', '#FFB86B', '#7ED7A5'];
 const CUSTOM_DATASET_PRESET = {
   id: 'custom',
   name: 'Custom...',
@@ -271,19 +347,33 @@ function validateConnectionForm(formState) {
       if (!parsedUrl.hostname) {
         return 'Redis URL must include a host.';
       }
-
-      return '';
     } catch {
       return 'Enter a valid Redis URL.';
     }
+  } else {
+    const port = Number(formState.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return 'Enter a valid Redis port.';
+    }
   }
 
-  const port = Number(formState.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return 'Enter a valid Redis port.';
+  if (!isValidDatabaseEngineValue(formState.engine)) {
+    return 'Select an engine.';
+  }
+
+  if (!isValidDatabaseServiceValue(formState.service)) {
+    return 'Select a provider.';
   }
 
   return '';
+}
+
+function isValidDatabaseEngineValue(value) {
+  return DATABASE_ENGINE_OPTIONS.some((option) => option.value === value);
+}
+
+function isValidDatabaseServiceValue(value) {
+  return DATABASE_SERVICE_OPTIONS.some((option) => option.value === value);
 }
 
 function isValidRedisPortValue(value) {
@@ -320,7 +410,9 @@ function hasConnectionFormInput(formState) {
     formState.hostOrUrl.trim() ||
       formState.port.trim() ||
       formState.username.trim() ||
-      formState.password.trim(),
+      formState.password.trim() ||
+      formState.engine ||
+      formState.service,
   );
 }
 
@@ -704,14 +796,18 @@ function describeScenarioShape(config) {
 }
 
 function describeDraftConfig(config) {
+  const advancedCount = countEnabledMemtierAdvancedOptions(config.memtierAdvanced);
+
   return [
     formatLoadProfileSummary(config),
     `${config.threads} threads`,
     formatRunLimit(config),
     `pipe ${config.pipeline}`,
+    config.clusterModeEnabled ? 'cluster aware' : null,
     `prefix ${formatKeyPrefixSummary(config)}`,
     describeScenarioShape(config),
     config.rateLimitEnabled ? `cap ${formatRateLimit(config.rateLimit)}` : null,
+    advancedCount ? `${advancedCount} advanced` : null,
   ]
     .filter(Boolean)
     .join(' • ');
@@ -1289,6 +1385,20 @@ function getFinalMetricValue(preferred, fallback = null) {
   return fallback;
 }
 
+function getFinalLatencyValue(preferred, fallback = null) {
+  if (
+    preferred === 0 &&
+    fallback !== null &&
+    fallback !== undefined &&
+    !Number.isNaN(fallback) &&
+    fallback > 0
+  ) {
+    return fallback;
+  }
+
+  return getFinalMetricValue(preferred, fallback);
+}
+
 function getAverageThroughputValue(run) {
   const summaryTotals = run.summary?.results?.totals;
   const throughputSeries = getDisplaySeries(run, 'ops_sec');
@@ -1308,10 +1418,20 @@ function getP99LatencyValue(run) {
     return getFinalMetricValue(rollingP99, run.metrics.latency_p99);
   }
 
-  return getFinalMetricValue(
+  return getFinalLatencyValue(
     summaryTotals?.p99Latency,
     getFinalMetricValue(rollingP99, run.metrics.latency_p99),
   );
+}
+
+function getP999LatencyValue(run) {
+  return getFinalLatencyValue(run.summary?.results?.totals?.p999Latency, null);
+}
+
+function getMaxLatencyValue(run) {
+  const latencySeries = getDisplaySeries(run, 'latency_ms');
+
+  return getFinalLatencyValue(run.summary?.results?.totals?.maxLatency, getSeriesPeak(latencySeries));
 }
 
 function buildPrimaryMetricItems(run) {
@@ -1342,10 +1462,12 @@ function buildAdvancedMetricItems(run) {
   const connectionsSeries = getDisplaySeries(run, 'connections');
   const latencySeries = getDisplaySeries(run, 'latency_ms');
   const averageThroughput = getAverageThroughputValue(run);
-  const p90Latency = getFinalMetricValue(
+  const p90Latency = getFinalLatencyValue(
     summaryTotals?.p90Latency,
     getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
   );
+  const p999Latency = getP999LatencyValue(run);
+  const maxLatency = getMaxLatencyValue(run);
 
   const averageBandwidthDisplay =
     summaryTotals?.kbSec !== null && summaryTotals?.kbSec !== undefined
@@ -1374,14 +1496,14 @@ function buildAdvancedMetricItems(run) {
     {
       label: 'Average latency',
       value: formatMetric(
-        getFinalMetricValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
+        getFinalLatencyValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
         formatLatency,
       ),
     },
     {
       label: 'p50 latency',
       value: formatMetric(
-        getFinalMetricValue(summaryTotals?.p50Latency, metrics.latency_p50),
+        getFinalLatencyValue(summaryTotals?.p50Latency, metrics.latency_p50),
         formatLatency,
       ),
     },
@@ -1392,6 +1514,14 @@ function buildAdvancedMetricItems(run) {
     {
       label: 'p99 latency',
       value: formatMetric(getP99LatencyValue(run), formatLatency),
+    },
+    {
+      label: 'p99.9 latency',
+      value: formatMetric(p999Latency, formatLatency),
+    },
+    {
+      label: 'Max latency',
+      value: formatMetric(maxLatency, formatLatency),
     },
     {
       label: 'Average bandwidth',
@@ -1470,19 +1600,19 @@ function buildLatencySummaryOptions(run) {
     {
       key: 'p50',
       label: 'p50',
-      value: getFinalMetricValue(summaryTotals?.p50Latency, metrics.latency_p50),
+      value: getFinalLatencyValue(summaryTotals?.p50Latency, metrics.latency_p50),
       formatter: formatLatency,
     },
     {
       key: 'average',
       label: 'average',
-      value: getFinalMetricValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
+      value: getFinalLatencyValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
       formatter: formatLatency,
     },
     {
       key: 'p90',
       label: 'p90',
-      value: getFinalMetricValue(
+      value: getFinalLatencyValue(
         summaryTotals?.p90Latency,
         getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
       ),
@@ -1492,6 +1622,18 @@ function buildLatencySummaryOptions(run) {
       key: 'p99',
       label: 'p99',
       value: getP99LatencyValue(run),
+      formatter: formatLatency,
+    },
+    {
+      key: 'p99.9',
+      label: 'p99.9',
+      value: getP999LatencyValue(run),
+      formatter: formatLatency,
+    },
+    {
+      key: 'max',
+      label: 'max',
+      value: getMaxLatencyValue(run),
       formatter: formatLatency,
     },
   ];
@@ -1553,10 +1695,12 @@ function getComparisonSnapshot(run, draft) {
             getFinalMetricValue(run.metrics.bytes_sec_avg, getSeriesValueAtEnd(bytesSeries)),
             formatBytesPerSecond,
           ),
-    averageLatency: getFinalMetricValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
-    p50Latency: getFinalMetricValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
-    p90Latency: getFinalMetricValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
+    averageLatency: getFinalLatencyValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
+    p50Latency: getFinalLatencyValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
+    p90Latency: getFinalLatencyValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
     p99Latency: getP99LatencyValue(run),
+    p999Latency: getP999LatencyValue(run),
+    maxLatency: getMaxLatencyValue(run),
     hitsSec: summaryTotals?.hitsSec ?? null,
     missesSec: summaryTotals?.missesSec ?? null,
     connectionErrors: run.metrics.connection_errors,
@@ -1650,6 +1794,14 @@ function buildComparisonRows(runsWithDrafts) {
     {
       label: 'p99 latency',
       values: snapshots.map((snapshot) => formatMetric(snapshot.p99Latency, formatLatency)),
+    },
+    {
+      label: 'p99.9 latency',
+      values: snapshots.map((snapshot) => formatMetric(snapshot.p999Latency, formatLatency)),
+    },
+    {
+      label: 'Max latency',
+      values: snapshots.map((snapshot) => formatMetric(snapshot.maxLatency, formatLatency)),
     },
     {
       label: 'Average bandwidth',
@@ -1780,8 +1932,24 @@ function buildChartData(points) {
   }));
 }
 
-function getCompareColor(index) {
-  return COMPARE_CHART_COLORS[index % COMPARE_CHART_COLORS.length];
+function getCompareColor(engine, engineIndex, fallbackIndex) {
+  const palette = COMPARE_ENGINE_COLORS[engine] ?? null;
+  if (palette?.length) {
+    return palette[engineIndex % palette.length];
+  }
+
+  return COMPARE_FALLBACK_COLORS[fallbackIndex % COMPARE_FALLBACK_COLORS.length];
+}
+
+function buildCompareColorMap(comparedRuns) {
+  const engineCounts = new Map();
+
+  return comparedRuns.map(({ run }, index) => {
+    const { engine } = normalizeDatabaseSource(run?.databaseSource);
+    const engineIndex = engineCounts.get(engine) ?? 0;
+    engineCounts.set(engine, engineIndex + 1);
+    return getCompareColor(engine, engineIndex, index);
+  });
 }
 
 function canCompareRunTimelines(comparedRuns) {
@@ -1870,6 +2038,88 @@ function buildCompareMetricOptions(comparedRuns, kind) {
 
 function IconAsset({ className = '', src }) {
   return <img alt="" aria-hidden="true" className={`icon-asset ${className}`.trim()} src={src} />;
+}
+
+function DatabaseSourceIcon({ engine }) {
+  return engine === 'valkey' ? <ValkeySymbolIcon /> : <RedisStackIcon />;
+}
+
+function DatabaseSourceBadge({ className = '', source }) {
+  const normalizedSource = normalizeDatabaseSource(source);
+  const engineLabel = getDatabaseEngineLabel(normalizedSource.engine);
+  const serviceLabel = getDatabaseServiceLabel(normalizedSource.service);
+
+  return (
+    <span
+      aria-label={`${serviceLabel}, ${engineLabel}`}
+      className={`database-source-badge database-source-badge-${normalizedSource.engine} ${className}`.trim()}
+      title={`${serviceLabel} / ${engineLabel}`}
+    >
+      <DatabaseSourceIcon engine={normalizedSource.engine} />
+      <span>{`${serviceLabel} / ${engineLabel}`}</span>
+    </span>
+  );
+}
+
+function DatabaseSourceSelects({ className = '', compact = false, formState, onFormChange }) {
+  const engineSelect = (
+    <select
+      aria-label={compact ? 'Engine' : undefined}
+      className={`database-source-select ${formState.engine ? '' : 'is-placeholder'}`.trim()}
+      name="engine"
+      onChange={onFormChange}
+      value={formState.engine ?? ''}
+    >
+      <option disabled value="">
+        Select Engine
+      </option>
+      {DATABASE_ENGINE_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+  const serviceSelect = (
+    <select
+      aria-label={compact ? 'Service' : undefined}
+      className={`database-source-select ${formState.service ? '' : 'is-placeholder'}`.trim()}
+      name="service"
+      onChange={onFormChange}
+      value={formState.service ?? ''}
+    >
+      <option disabled value="">
+        Select Provider
+      </option>
+      {DATABASE_SERVICE_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+
+  if (compact) {
+    return (
+      <div className={`database-source-select-row database-source-select-row-compact ${className}`.trim()}>
+        {engineSelect}
+        {serviceSelect}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`form-row database-source-select-row ${className}`.trim()}>
+      <label>
+        <span>Engine</span>
+        {engineSelect}
+      </label>
+      <label>
+        <span>Service</span>
+        {serviceSelect}
+      </label>
+    </div>
+  );
 }
 
 function ConnectionScreen({
@@ -1962,6 +2212,8 @@ function ConnectionScreen({
             />
           </label>
 
+          <DatabaseSourceSelects formState={formState} onFormChange={onFormChange} />
+
           {connectError ? <p className="form-error">{connectError}</p> : null}
 
           <button className="primary-button" disabled={connectDisabled} type="submit">
@@ -1979,46 +2231,109 @@ function ConnectionFormPanel({
   formState,
   formError,
   onConnect,
+  onClose,
   onFormChange,
   onHostOrUrlPaste,
 }) {
   return (
-    <form className="topbar-connect-form" onSubmit={onConnect}>
-      <input
-        autoComplete="off"
-        name="hostOrUrl"
-        onChange={onFormChange}
-        onPaste={onHostOrUrlPaste}
-        placeholder="Host or URL"
-        value={formState.hostOrUrl}
-      />
-      <input
-        inputMode="numeric"
-        name="port"
-        onChange={onFormChange}
-        placeholder="Port"
-        value={formState.port}
-      />
-      <input
-        autoComplete="username"
-        name="username"
-        onChange={onFormChange}
-        placeholder="Username"
-        value={formState.username}
-      />
-      <input
-        autoComplete="current-password"
-        name="password"
-        onChange={onFormChange}
-        placeholder="Password"
-        type="password"
-        value={formState.password}
-      />
-      <button className="primary-button" disabled={connectDisabled} type="submit">
-        {connectPending ? 'Connecting…' : 'Connect'}
-      </button>
-      {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
-    </form>
+    <div className="topbar-connect-form-shell">
+      <form className="topbar-connect-form" onSubmit={onConnect}>
+        <div className="topbar-host-source-group">
+          <input
+            autoComplete="off"
+            name="hostOrUrl"
+            onChange={onFormChange}
+            onPaste={onHostOrUrlPaste}
+            placeholder="Host or URL"
+            value={formState.hostOrUrl}
+          />
+          <DatabaseSourceSelects
+            className="topbar-source-selects"
+            compact
+            formState={formState}
+            onFormChange={onFormChange}
+          />
+        </div>
+        <input
+          inputMode="numeric"
+          name="port"
+          onChange={onFormChange}
+          placeholder="Port"
+          value={formState.port}
+        />
+        <input
+          autoComplete="username"
+          name="username"
+          onChange={onFormChange}
+          placeholder="Username"
+          value={formState.username}
+        />
+        <input
+          autoComplete="current-password"
+          name="password"
+          onChange={onFormChange}
+          placeholder="Password"
+          type="password"
+          value={formState.password}
+        />
+        <div className="topbar-connect-actions">
+          <button className="primary-button" disabled={connectDisabled} type="submit">
+            {connectPending ? 'Connecting…' : 'Connect'}
+          </button>
+          {onClose ? (
+            <button className="ghost-button topbar-close-form-button" onClick={onClose} type="button">
+              Close
+            </button>
+          ) : null}
+        </div>
+        {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
+      </form>
+    </div>
+  );
+}
+
+function ConnectionModal({
+  connectDisabled,
+  connectPending,
+  formError,
+  formState,
+  onClose,
+  onConnect,
+  onFormChange,
+  onHostOrUrlPaste,
+  open,
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim connection-modal-scrim" onClick={onClose}>
+      <section
+        aria-labelledby="connection-modal-title"
+        aria-modal="true"
+        className="connection-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="connection-modal-header">
+          <div>
+            <p className="eyebrow">Database</p>
+            <h2 id="connection-modal-title">Add connection</h2>
+          </div>
+        </div>
+        <ConnectionFormPanel
+          connectDisabled={connectDisabled}
+          connectPending={connectPending}
+          formError={formError}
+          formState={formState}
+          onClose={onClose}
+          onConnect={onConnect}
+          onFormChange={onFormChange}
+          onHostOrUrlPaste={onHostOrUrlPaste}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -2735,6 +3050,11 @@ function ConnectionCard({
         <p className="connection-load-error">{connection.load.error ?? 'Dataset load failed'}</p>
       ) : null}
 
+      <DatabaseSourceBadge
+        className="connection-source-badge"
+        source={connection.databaseSource}
+      />
+
       <div
         className={`connection-menu-wrap ${showMenu ? 'is-open' : ''}`}
         onClick={(event) => event.stopPropagation()}
@@ -2836,13 +3156,15 @@ function TopBar({
   const setupNote =
     setup.status === 'error' ? 'Setup needs attention' : !setupReady ? 'Preparing memtier' : null;
   const canAddConnection =
-    setupReady && connections.length < 3 && !hasRunningRuns && !hasActiveLoads;
-  const showForm = !connections.length || showAddConnectionForm;
+    setupReady && connections.length < 4 && !hasRunningRuns && !hasActiveLoads;
+  const showInlineForm = !connections.length;
+  const showAddConnectionModal = connections.length > 0 && showAddConnectionForm;
+  const formVisible = showInlineForm || showAddConnectionModal;
   const activePresetName = selectedPresetName || presetOptions[0]?.name || '';
 
   useEffect(() => {
     if (!connections.length) {
-      setShowAddConnectionForm(true);
+      setShowAddConnectionForm(false);
       return;
     }
 
@@ -2850,96 +3172,105 @@ function TopBar({
   }, [connections.length]);
 
   useEffect(() => {
-    onConnectionFormVisibilityChange?.(showForm);
-  }, [onConnectionFormVisibilityChange, showForm]);
+    onConnectionFormVisibilityChange?.(formVisible);
+  }, [formVisible, onConnectionFormVisibilityChange]);
 
   return (
-    <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
-      <div className="topbar-brand">
-        <div className="topbar-brand-mark">
-          <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
+    <>
+      <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
+        <div className="topbar-brand">
+          <div className="topbar-brand-mark">
+            <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
+          </div>
+          <div className="topbar-brand-copy">
+            <p className="eyebrow">memviz</p>
+            <strong>Redis benchmark workspace</strong>
+            {setupNote ? (
+              <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
+            ) : null}
+            {presetOptions.length ? (
+              <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
+                <span className="topbar-preset-label">Preset</span>
+                <select
+                  id="topbar-preset-select"
+                  className="topbar-preset-select"
+                  disabled={presetSelectionDisabled}
+                  onChange={(event) => onPresetChange(event.target.value)}
+                  value={activePresetName}
+                >
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.label}
+                    </option>
+                  ))}
+                  <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
+                </select>
+                <PresetInfoTooltip />
+              </label>
+            ) : null}
+          </div>
         </div>
-        <div className="topbar-brand-copy">
-          <p className="eyebrow">memviz</p>
-          <strong>Redis benchmark workspace</strong>
-          {setupNote ? (
-            <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
-          ) : null}
-          {presetOptions.length ? (
-            <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
-              <span className="topbar-preset-label">Preset</span>
-              <select
-                id="topbar-preset-select"
-                className="topbar-preset-select"
-                disabled={presetSelectionDisabled}
-                onChange={(event) => onPresetChange(event.target.value)}
-                value={activePresetName}
-              >
-                {presetOptions.map((preset) => (
-                  <option key={preset.name} value={preset.name}>
-                    {preset.label}
-                  </option>
-                ))}
-                <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
-              </select>
-              <PresetInfoTooltip />
-            </label>
+
+        <div className="topbar-connections">
+          {connections.map((connection) => (
+            <ConnectionCard
+              connection={connection}
+              disconnectDisabled={hasRunningRuns || hasActiveLoads}
+              isSelected={connection.id === selectedConnectionId}
+              key={connection.id}
+              loadDisabled={hasRunningRuns || hasActiveLoads}
+              redisInsightActionTitle={redisInsightActionTitle}
+              redisInsightDisabled={redisInsightDisabled}
+              onLoadDataset={onLoadDataset}
+              onDisconnect={onDisconnect}
+              onOpenRedisInsight={onOpenRedisInsight}
+              onRename={onRenameConnection}
+              onSelect={onSelectConnection}
+            />
+          ))}
+
+          {showInlineForm ? (
+            <ConnectionFormPanel
+              connectDisabled={connectDisabled}
+              connectPending={connectPending}
+              formError={connectError || validationError}
+              formState={formState}
+              onConnect={onConnect}
+              onFormChange={onFormChange}
+              onHostOrUrlPaste={onHostOrUrlPaste}
+            />
           ) : null}
         </div>
-      </div>
 
-      <div className="topbar-connections">
-        {connections.map((connection) => (
-          <ConnectionCard
-            connection={connection}
-            disconnectDisabled={hasRunningRuns || hasActiveLoads}
-            isSelected={connection.id === selectedConnectionId}
-            key={connection.id}
-            loadDisabled={hasRunningRuns || hasActiveLoads}
-            redisInsightActionTitle={redisInsightActionTitle}
-            redisInsightDisabled={redisInsightDisabled}
-            onLoadDataset={onLoadDataset}
-            onDisconnect={onDisconnect}
-            onOpenRedisInsight={onOpenRedisInsight}
-            onRename={onRenameConnection}
-            onSelect={onSelectConnection}
-          />
-        ))}
-
-        {showForm ? (
-          <ConnectionFormPanel
-            connectDisabled={connectDisabled}
-            connectPending={connectPending}
-            formState={formState}
-            formError={connectError || validationError}
-            onConnect={onConnect}
-            onFormChange={onFormChange}
-            onHostOrUrlPaste={onHostOrUrlPaste}
-          />
+        {connections.length ? (
+          <div className="topbar-trailing">
+            <button
+              className="ghost-button"
+              disabled={!canAddConnection}
+              onClick={() => {
+                onPrepareAddConnection();
+                setShowAddConnectionForm(true);
+              }}
+              type="button"
+            >
+              Add connection
+            </button>
+          </div>
         ) : null}
-      </div>
+      </header>
 
-      {connections.length ? (
-        <div className="topbar-trailing">
-          <button
-            className="ghost-button"
-            disabled={!canAddConnection}
-            onClick={() =>
-              setShowAddConnectionForm((current) => {
-                const next = !current;
-                if (next) {
-                  onPrepareAddConnection();
-                }
-                return next;
-              })
-            }
-            type="button"
-          >
-            {showForm ? 'Close' : 'Add connection'}
-          </button>
-        </div>
-      ) : null}
-    </header>
+      <ConnectionModal
+        connectDisabled={connectDisabled}
+        connectPending={connectPending}
+        formError={connectError || validationError}
+        formState={formState}
+        onClose={() => setShowAddConnectionForm(false)}
+        onConnect={onConnect}
+        onFormChange={onFormChange}
+        onHostOrUrlPaste={onHostOrUrlPaste}
+        open={showAddConnectionModal}
+      />
+    </>
   );
 }
 
@@ -3382,6 +3713,20 @@ function ConfigTable({
             </div>
           </ConfigRow>
 
+          <ConfigRow label="Cluster">
+            <div className="config-composite-control config-composite-control-paired">
+              <label className="config-checkbox config-checkbox-wide">
+                <input
+                  checked={Boolean(config.clusterModeEnabled)}
+                  disabled={disabled}
+                  onChange={(event) => onConfigChange('clusterModeEnabled', event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Cluster Aware</span>
+              </label>
+            </div>
+          </ConfigRow>
+
           <StaircaseConfigRow label="">
             <div className="config-composite-control config-composite-control-paired">
               <label className="config-checkbox config-checkbox-wide">
@@ -3517,6 +3862,232 @@ function ConfigTable({
   );
 }
 
+function getMemtierAdvancedEntry(config, option) {
+  const entry = config?.memtierAdvanced?.[option.key];
+  if (entry) {
+    return entry;
+  }
+
+  return {
+    enabled: false,
+    value: option.defaultValue ?? '',
+  };
+}
+
+function buildNextMemtierAdvanced(config, option, nextEntry) {
+  const nextAdvanced = { ...(config.memtierAdvanced ?? {}) };
+
+  if (!nextEntry.enabled) {
+    delete nextAdvanced[option.key];
+    return nextAdvanced;
+  }
+
+  nextAdvanced[option.key] =
+    option.type === 'boolean'
+      ? { enabled: true }
+      : {
+          enabled: true,
+          value: nextEntry.value ?? option.defaultValue ?? '',
+        };
+
+  return nextAdvanced;
+}
+
+function AdvancedMemtierOptionControl({
+  config,
+  disabled,
+  onAdvancedChange,
+  option,
+}) {
+  const entry = getMemtierAdvancedEntry(config, option);
+  const enabled = Boolean(entry.enabled);
+  const value = entry.value ?? option.defaultValue ?? '';
+
+  function commit(nextEntry) {
+    onAdvancedChange(buildNextMemtierAdvanced(config, option, nextEntry));
+  }
+
+  if (option.type === 'boolean') {
+    return (
+      <label className={`advanced-option advanced-option-boolean ${enabled ? 'is-enabled' : ''}`}>
+        <input
+          checked={enabled}
+          disabled={disabled}
+          onChange={(event) => commit({ enabled: event.target.checked })}
+          type="checkbox"
+        />
+        <span>{option.label}</span>
+        <code>{option.flag}</code>
+      </label>
+    );
+  }
+
+  const inputDisabled = disabled || !enabled;
+
+  return (
+    <div className={`advanced-option ${enabled ? 'is-enabled' : ''}`.trim()}>
+      <label className="advanced-option-toggle">
+        <input
+          checked={enabled}
+          disabled={disabled}
+          onChange={(event) =>
+            commit({
+              enabled: event.target.checked,
+              value,
+            })
+          }
+          type="checkbox"
+        />
+        <span>{option.label}</span>
+        <code>{option.flag}</code>
+      </label>
+
+      {option.type === 'select' ? (
+        <select
+          disabled={inputDisabled}
+          onChange={(event) =>
+            commit({
+              enabled: true,
+              value: event.target.value,
+            })
+          }
+          value={value}
+        >
+          {option.choices.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      ) : option.type === 'multiline' ? (
+        <textarea
+          disabled={inputDisabled}
+          onChange={(event) =>
+            commit({
+              enabled: true,
+              value: event.target.value,
+            })
+          }
+          placeholder={option.placeholder ?? ''}
+          rows={3}
+          spellCheck={false}
+          value={value}
+        />
+      ) : (
+        <input
+          disabled={inputDisabled}
+          inputMode={option.type === 'text' ? undefined : 'numeric'}
+          min={option.min}
+          max={option.max}
+          onChange={(event) =>
+            commit({
+              enabled: true,
+              value: event.target.value,
+            })
+          }
+          placeholder={option.placeholder ?? option.defaultValue ?? ''}
+          step={option.type === 'integer' ? 1 : 'any'}
+          type={option.type === 'text' ? 'text' : 'number'}
+          value={value}
+        />
+      )}
+    </div>
+  );
+}
+
+function MemtierAdvancedModal({
+  config,
+  disabled,
+  onClose,
+  onConfigChange,
+  open,
+  scenario,
+}) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim memtier-advanced-scrim" onClick={onClose}>
+      <section
+        aria-labelledby="memtier-advanced-title"
+        aria-modal="true"
+        className="memtier-advanced-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className="memtier-advanced-header">
+          <div>
+            <p className="eyebrow">Memtier</p>
+            <h2 id="memtier-advanced-title">Advanced parameters</h2>
+            <p className="dataset-modal-subtitle">
+              Core controls stay synchronized with the test card. Extra flags are appended to
+              the generated memtier command and checked against the active runtime before launch.
+            </p>
+          </div>
+          <button className="ghost-button" onClick={onClose} type="button">
+            Close
+          </button>
+        </header>
+
+        <div className="memtier-advanced-body">
+          <section className="advanced-option-group advanced-option-group-core">
+            <div className="advanced-option-group-head">
+              <h3>Core benchmark</h3>
+              <span>Always active</span>
+            </div>
+            <ConfigTable
+              config={config}
+              disabled={disabled}
+              onConfigChange={onConfigChange}
+              scenario={scenario}
+            />
+          </section>
+
+          {MEMTIER_ADVANCED_OPTION_GROUPS.map((group) => (
+            <section className="advanced-option-group" key={group.id}>
+              <div className="advanced-option-group-head">
+                <h3>{group.title}</h3>
+                <span>{group.options.length} options</span>
+              </div>
+              <div className="advanced-option-grid">
+                {group.options.map((option) => (
+                  <AdvancedMemtierOptionControl
+                    config={config}
+                    disabled={disabled}
+                    key={option.key}
+                    onAdvancedChange={(nextAdvanced) =>
+                      onConfigChange('memtierAdvanced', nextAdvanced)
+                    }
+                    option={option}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function RunLimitField({
   config,
   disabled,
@@ -3624,6 +4195,7 @@ function ScenarioCard({
   compareSelectionDisabled,
   config,
   connectionCount,
+  databaseSource,
   disabled,
   draft,
   isLaunching,
@@ -3633,6 +4205,7 @@ function ScenarioCard({
   isCustomizing,
   onRename,
   onCancelRun,
+  onDelete,
   selectedConnectionName,
   onSelect,
   onToggleCompareSelection,
@@ -3775,94 +4348,114 @@ function ScenarioCard({
             ) : null}
           </div>
         </div>
+      </div>
 
-        <div className="scenario-actions" onClick={(event) => event.stopPropagation()}>
-          {compareMode ? (
-            isLocked && run?.status === 'completed' ? (
-              <label className={`compare-check ${compareSelected ? 'is-selected' : ''}`}>
-                <input
-                  checked={compareSelected}
-                  disabled={compareSelectionDisabled}
-                  onChange={() => onToggleCompareSelection(run.id)}
-                  type="checkbox"
-                />
-                <span />
-              </label>
-            ) : null
-          ) : !isLocked ? (
-            <>
+      <div className="scenario-actions" onClick={(event) => event.stopPropagation()}>
+        {compareMode ? (
+          isLocked && run?.status === 'completed' ? (
+            <label className={`compare-check ${compareSelected ? 'is-selected' : ''}`}>
+              <input
+                checked={compareSelected}
+                disabled={compareSelectionDisabled}
+                onChange={() => onToggleCompareSelection(run.id)}
+                type="checkbox"
+              />
+              <span />
+            </label>
+          ) : null
+        ) : (
+          <>
+            {!isRunning ? (
               <button
-                className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
+                aria-label={`Delete ${title}`}
+                className="delete-test-button"
                 disabled={disabled}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onToggleCustomize(draft.id);
+                  onDelete(draft.id);
                 }}
+                title="Delete test"
                 type="button"
               >
-                <IconAsset className="button-icon" src={settingsIconMidnight} />
+                <TrashIcon />
               </button>
-              <div className="play-menu-wrap">
-                <button
-                  className="play-button"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (connectionCount <= 1) {
-                      onRun(draft.id, 'selected');
-                      return;
-                    }
+            ) : null}
 
-                    setShowRunMenu((open) => !open);
+            {!isLocked ? (
+              <>
+                <button
+                  className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
+                  disabled={disabled}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleCustomize(draft.id);
                   }}
                   type="button"
                 >
-                  {isLaunching ? '…' : '▶'}
+                  <IconAsset className="button-icon" src={settingsIconMidnight} />
                 </button>
-
-                {showRunMenu && connectionCount > 1 ? (
-                  <div className="play-menu">
-                    <button
-                      className="play-menu-option"
-                      onClick={() => {
-                        setShowRunMenu(false);
+                <div className="play-menu-wrap">
+                  <button
+                    className="play-button"
+                    disabled={disabled}
+                    onClick={() => {
+                      if (connectionCount <= 1) {
                         onRun(draft.id, 'selected');
-                      }}
-                      type="button"
-                    >
-                      {`Run on ${selectedConnectionName ?? 'selected connection'}`}
-                    </button>
-                    <button
-                      className="play-menu-option"
-                      onClick={() => {
-                        setShowRunMenu(false);
-                        onRun(draft.id, 'all');
-                      }}
-                      type="button"
-                    >
-                      Run on all connections
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </>
-          ) : run?.status === 'running' ? (
-            <button
-              className="running-control"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCancelRun();
-              }}
-              type="button"
-            >
-              <RunningIndicator />
-              <span className="stop-run-button">■</span>
-            </button>
-          ) : run?.status !== 'completed' ? (
-            <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
-              {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
-            </span>
-          ) : null}
-        </div>
+                        return;
+                      }
+
+                      setShowRunMenu((open) => !open);
+                    }}
+                    type="button"
+                  >
+                    {isLaunching ? '…' : '▶'}
+                  </button>
+
+                  {showRunMenu && connectionCount > 1 ? (
+                    <div className="play-menu">
+                      <button
+                        className="play-menu-option"
+                        onClick={() => {
+                          setShowRunMenu(false);
+                          onRun(draft.id, 'selected');
+                        }}
+                        type="button"
+                      >
+                        {`Run on ${selectedConnectionName ?? 'selected connection'}`}
+                      </button>
+                      <button
+                        className="play-menu-option"
+                        onClick={() => {
+                          setShowRunMenu(false);
+                          onRun(draft.id, 'all');
+                        }}
+                        type="button"
+                      >
+                        Run on all connections
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : isRunning ? (
+              <button
+                className="running-control"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCancelRun();
+                }}
+                type="button"
+              >
+                <RunningIndicator />
+                <span className="stop-run-button">■</span>
+              </button>
+            ) : run?.status !== 'completed' ? (
+              <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
+                {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
+              </span>
+            ) : null}
+          </>
+        )}
       </div>
 
       {isCustomizing && !isLocked ? (
@@ -3903,6 +4496,13 @@ function ScenarioCard({
           </div>
         </div>
       ) : null}
+
+      {databaseSource ? (
+        <DatabaseSourceBadge
+          className="scenario-source-badge"
+          source={databaseSource}
+        />
+      ) : null}
     </article>
   );
 }
@@ -3918,6 +4518,7 @@ function ScenarioList({
   hasRunningRuns,
   onClear,
   onCompareSelected,
+  onDelete,
   onRename,
   onCancelRun,
   onSelect,
@@ -3942,6 +4543,8 @@ function ScenarioList({
       setShowNewTestMenu(false);
     }
   }, [canCreateDraft, compareMode]);
+
+  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
 
   return (
     <aside className="scenario-panel">
@@ -4008,6 +4611,10 @@ function ScenarioList({
           drafts.map((draft) => {
             const scenario = scenarioMap.get(draft.scenarioId);
             const run = draft.runId ? runById.get(draft.runId) ?? null : null;
+            const databaseSource =
+              run?.databaseSource ??
+              connectionById.get(draft.connectionId ?? run?.connectionId)?.databaseSource ??
+              null;
             if (!scenario) {
               return null;
             }
@@ -4021,6 +4628,7 @@ function ScenarioList({
                 }
                 config={draft.config}
                 connectionCount={connections.length}
+                databaseSource={databaseSource}
                 disabled={hasRunningRuns || runPendingDraftId !== null}
                 draft={draft}
                 isCustomizing={draft.isCustomizing}
@@ -4030,6 +4638,7 @@ function ScenarioList({
                 isSelected={!compareMode && selectedDraftId === draft.id}
                 key={draft.id}
                 onCancelRun={onCancelRun}
+                onDelete={onDelete}
                 onRename={onRename}
                 onSelect={onSelect}
                 onToggleCompareSelection={onToggleCompareSelection}
@@ -4234,6 +4843,26 @@ function CompareMetricPicker({ onChange, options, selectedKey }) {
   );
 }
 
+function CompareRunLegend({ colorMap, comparedRuns }) {
+  return (
+    <div className="compare-run-legend">
+      {comparedRuns.map(({ draft, run }, index) => (
+        <div className="compare-run-legend-item" key={run.id}>
+          <span
+            className="compare-run-color-dot"
+            style={{ backgroundColor: colorMap[index] }}
+          />
+          <span className="compare-run-legend-name">{getBaseRunLabel(run, draft)}</span>
+          <DatabaseSourceBadge
+            className="comparison-source-badge"
+            source={run.databaseSource}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TimeseriesChart({
   color,
   emptyValue = 'Waiting for samples',
@@ -4341,6 +4970,7 @@ function CompareTimeseriesChart({
     color: colorMap[index],
     dataKey: `series_${index}`,
     label: getBaseRunLabel(run, draft),
+    source: run.databaseSource,
   }));
 
   return (
@@ -4355,6 +4985,8 @@ function CompareTimeseriesChart({
           selectedKey={selectedMetricKey}
         />
       </div>
+
+      <CompareRunLegend colorMap={colorMap} comparedRuns={comparedRuns} />
 
       <div className="chart-area">
         {data.length ? (
@@ -4695,7 +5327,7 @@ function ComparePanel({ comparedRuns }) {
   const rows = buildComparisonRows(comparedRuns);
   const groupedRows = groupComparisonRows(rows);
   const canCompareTimelines = canCompareRunTimelines(comparedRuns);
-  const compareColors = comparedRuns.map((_, index) => getCompareColor(index));
+  const compareColors = buildCompareColorMap(comparedRuns);
 
   async function handleExportPdf() {
     const previousCollapsedSections = collapsedSections;
@@ -4811,6 +5443,10 @@ function ComparePanel({ comparedRuns }) {
                       <span className="comparison-run-connection">
                         {run.connectionName ?? run.target?.summary ?? '—'}
                       </span>
+                      <DatabaseSourceBadge
+                        className="comparison-source-badge"
+                        source={run.databaseSource}
+                      />
                     </div>
                   </th>
                 ))}
@@ -4913,7 +5549,14 @@ function MetricsPanel({ draft, run }) {
     ].includes(item.label),
   );
   const latencyAdvancedItems = advancedMetricItems.filter((item) =>
-    ['Average latency', 'p50 latency', 'p90 latency', 'p99 latency'].includes(item.label),
+    [
+      'Average latency',
+      'p50 latency',
+      'p90 latency',
+      'p99 latency',
+      'p99.9 latency',
+      'Max latency',
+    ].includes(item.label),
   );
   const connectionAdvancedItems = advancedMetricItems.filter((item) =>
     ['Connections', 'Peak connections', 'Connection errors'].includes(item.label),
@@ -6069,7 +6712,7 @@ export default function App() {
     setupState.status !== 'ready' ||
     hasRunningRuns ||
     hasActiveLoads ||
-    connections.length >= 3;
+    connections.length >= 4;
 
   async function handleRetrySetup() {
     try {
@@ -6120,6 +6763,54 @@ export default function App() {
           : draft,
       ),
     );
+  }
+
+  async function handleDeleteDraft(draftId) {
+    const draft = drafts.find((entry) => entry.id === draftId);
+    if (!draft) {
+      return;
+    }
+
+    setConnectError('');
+
+    const removeDraftFromList = () => {
+      const remainingDrafts = drafts.filter((entry) => entry.id !== draftId);
+      setDrafts(remainingDrafts);
+
+      if (selectedDraftId === draftId) {
+        setSelectedDraftId(remainingDrafts[0]?.id ?? null);
+      }
+    };
+
+    if (!draft.runId) {
+      removeDraftFromList();
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/run/${encodeURIComponent(draft.runId)}`, {
+        method: 'DELETE',
+      });
+      const payload = await readJsonResponse(response, 'Delete failed.');
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? 'Delete failed.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+      setSelectedComparisonRunIds((currentIds) => {
+        const nextIds = currentIds.filter((runId) => runId !== draft.runId);
+        if (nextIds.length < 2) {
+          setCompareView(false);
+        }
+        return nextIds;
+      });
+      removeDraftFromList();
+    } catch (error) {
+      setConnectError(error.message);
+    }
   }
 
   function handleNewTest(scenarioId) {
@@ -6264,6 +6955,7 @@ export default function App() {
             onCancelRun={() => setShowCancelRunPrompt(true)}
             onClear={handleClear}
             onCompareSelected={handleCompareSelected}
+            onDelete={handleDeleteDraft}
             onRename={handleRenameDraft}
             onSelect={handleSelectDraft}
             onToggleCompareMode={handleToggleCompareMode}
