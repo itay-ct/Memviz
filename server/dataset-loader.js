@@ -61,6 +61,10 @@ const COUNTRIES = [
   'Australia',
 ];
 
+const FLUSH_ACK_TIMEOUT_MS = 15000;
+const MAX_LOADER_PARALLELISM = 32;
+const fixedValueCache = new WeakMap();
+
 function createLoaderError(message, kind = 'load') {
   const error = new Error(message);
   error.kind = kind;
@@ -100,6 +104,29 @@ function asInteger(value, fallback = 0) {
 function asFloat(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function asBoundedInteger(value, fallback, { min, max }) {
+  return Math.min(max, Math.max(min, asInteger(value, fallback)));
+}
+
+async function settleWithTimeout(promise, timeoutMs) {
+  let timeoutId;
+  const guardedPromise = Promise.resolve(promise).then(
+    (value) => ({ status: 'fulfilled', value }),
+    (error) => ({ status: 'rejected', error }),
+  );
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => {
+      resolve({ status: 'timed_out' });
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([guardedPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function sanitizeToken(value) {
@@ -146,6 +173,44 @@ function createEmail(context, random, index) {
   return email;
 }
 
+function shouldVaryByRecord(fieldSpec) {
+  return (
+    fieldSpec?.vary_by_record !== false &&
+    fieldSpec?.varyByRecord !== false &&
+    fieldSpec?.constant !== true
+  );
+}
+
+function buildFixedSizeString(fieldName, fieldSpec, index, { varyByRecord }) {
+  const size = asInteger(fieldSpec?.size ?? fieldSpec?.bytes, 1024);
+  if (size <= 0) {
+    return '';
+  }
+
+  const token = sanitizeToken(fieldName) || 'field';
+  const alphabet = String(fieldSpec?.alphabet ?? '0123456789abcdef');
+  const seed = varyByRecord ? `${token}-${index + 1}:` : `${token}:`;
+  const chunk = `${seed}${alphabet || 'x'}`;
+
+  return chunk.repeat(Math.ceil(size / chunk.length)).slice(0, size);
+}
+
+function createFixedSizeString(fieldName, fieldSpec, index) {
+  const varyByRecord = shouldVaryByRecord(fieldSpec);
+  if (varyByRecord || !fieldSpec || typeof fieldSpec !== 'object') {
+    return buildFixedSizeString(fieldName, fieldSpec, index, { varyByRecord });
+  }
+
+  if (!fixedValueCache.has(fieldSpec)) {
+    fixedValueCache.set(
+      fieldSpec,
+      buildFixedSizeString(fieldName, fieldSpec, index, { varyByRecord: false }),
+    );
+  }
+
+  return fixedValueCache.get(fieldSpec);
+}
+
 function generateValue(fieldName, fieldSpec, context, index) {
   const type = String(fieldSpec?.type ?? 'string').toLowerCase();
 
@@ -188,6 +253,10 @@ function generateValue(fieldName, fieldSpec, context, index) {
 
   if (type === 'country') {
     return pick(COUNTRIES, context.random);
+  }
+
+  if (type === 'blob' || type === 'bytes' || type === 'payload') {
+    return createFixedSizeString(fieldName, fieldSpec, index);
   }
 
   if (type === 'tag' || type === 'text' || type === 'string') {
@@ -345,6 +414,19 @@ async function dropSearchIndexIfNeeded(client, storageSpec) {
   }
 }
 
+async function flushDatabase(client) {
+  const result = await settleWithTimeout(
+    client.sendCommand(['FLUSHDB', 'ASYNC']),
+    FLUSH_ACK_TIMEOUT_MS,
+  );
+
+  if (result.status === 'rejected') {
+    throw result.error;
+  }
+
+  return result.status === 'timed_out';
+}
+
 async function createRecordWriter(client, storageSpec) {
   const storageType = String(storageSpec?.type ?? 'json').toLowerCase();
   const supportsRedisJson =
@@ -362,6 +444,18 @@ async function createRecordWriter(client, storageSpec) {
       return client.hSet(key, hash);
     }
 
+    if (storageType === 'string') {
+      const valueField = String(storageSpec?.value_field ?? storageSpec?.valueField ?? 'value');
+      const value =
+        record[valueField] ??
+        record.payload ??
+        record.value ??
+        record.data ??
+        record;
+
+      return client.set(key, toRedisString(value));
+    }
+
     const serialized = JSON.stringify(record);
     if (supportsRedisJson) {
       return client.sendCommand(['JSON.SET', key, '$', serialized]);
@@ -369,6 +463,114 @@ async function createRecordWriter(client, storageSpec) {
 
     return client.set(key, serialized);
   };
+}
+
+function createRedisClient(target) {
+  const client = createClient({
+    url: buildRedisUrl(target),
+    socket: {
+      connectTimeout: 10000,
+    },
+  });
+
+  client.on('error', () => {});
+  return client;
+}
+
+async function closeRedisClient(client) {
+  if (client.isOpen) {
+    await client.disconnect().catch(() => {});
+  } else if (typeof client.destroy === 'function') {
+    client.destroy();
+  }
+}
+
+async function loadRecordRange({
+  batchSize,
+  datasetSpec,
+  onRecordsLoaded,
+  startIndex,
+  storageSpec,
+  target,
+  totalRecords,
+  workerIndex,
+}) {
+  const client = createRedisClient(target);
+  await client.connect();
+
+  try {
+    const random = createSeededRandom(asInteger(datasetSpec?.seed, 42) + workerIndex);
+    const context = {
+      generatedEmails: [],
+      patterns: datasetSpec?.generator?.patterns ?? datasetSpec?.patterns ?? {},
+      random,
+    };
+    const writeRecord = await createRecordWriter(client, storageSpec);
+
+    for (let offset = startIndex; offset < totalRecords; offset += batchSize) {
+      const size = Math.min(batchSize, totalRecords - offset);
+      const commands = [];
+
+      for (let index = 0; index < size; index += 1) {
+        const recordIndex = offset + index;
+        const record = buildRecord(datasetSpec, recordIndex, context);
+        commands.push(writeRecord(record, recordIndex));
+      }
+
+      await Promise.all(commands);
+      onRecordsLoaded(size);
+    }
+  } finally {
+    await closeRedisClient(client);
+  }
+}
+
+async function loadRecordsInParallel({
+  batchSize,
+  datasetSpec,
+  onProgress,
+  parallelism,
+  storageSpec,
+  target,
+  totalRecords,
+}) {
+  const startPct = 18;
+  const loadSpan = 74;
+  const workerCount = Math.min(totalRecords || 1, parallelism);
+  const workerSpan = Math.ceil(totalRecords / workerCount);
+  let completed = 0;
+
+  const updateProgress = (loadedCount) => {
+    completed += loadedCount;
+    const safeCompleted = Math.min(totalRecords, completed);
+    const progressPct = startPct + (safeCompleted / totalRecords) * loadSpan;
+    onProgress?.({
+      status: 'running',
+      progressPct,
+      message: `Loading dataset (${safeCompleted.toLocaleString()} / ${totalRecords.toLocaleString()})`,
+    });
+  };
+
+  await Promise.all(
+    Array.from({ length: workerCount }, (_entry, workerIndex) => {
+      const startIndex = workerIndex * workerSpan;
+      if (startIndex >= totalRecords) {
+        return null;
+      }
+
+      const endIndex = Math.min(totalRecords, startIndex + workerSpan);
+      return loadRecordRange({
+        batchSize,
+        datasetSpec,
+        onRecordsLoaded: updateProgress,
+        startIndex,
+        storageSpec,
+        target,
+        totalRecords: endIndex,
+        workerIndex,
+      });
+    }).filter(Boolean),
+  );
 }
 
 export async function loadDatasetIntoRedis({
@@ -382,9 +584,12 @@ export async function loadDatasetIntoRedis({
   const storageSpec = parseYamlText(storageYaml, 'Storage spec');
   const totalRecords = asInteger(datasetSpec?.records, 0);
   const batchSize = Math.max(1, asInteger(storageSpec?.pipeline_size, 1000));
-  const client = createClient({
-    url: buildRedisUrl(target),
-  });
+  const parallelism = asBoundedInteger(
+    storageSpec?.parallelism ?? storageSpec?.workers ?? storageSpec?.loader_workers,
+    1,
+    { min: 1, max: MAX_LOADER_PARALLELISM },
+  );
+  const client = createRedisClient(target);
 
   onProgress?.({
     status: 'running',
@@ -409,18 +614,15 @@ export async function loadDatasetIntoRedis({
       });
 
       await dropSearchIndexIfNeeded(client, storageSpec);
-      await client.flushDb();
+      const flushTimedOut = await flushDatabase(client);
+      if (flushTimedOut) {
+        onProgress?.({
+          status: 'running',
+          progressPct: 16,
+          message: 'Flush acknowledgement timed out; loading deterministic keys',
+        });
+      }
     }
-
-    const random = createSeededRandom(asInteger(datasetSpec?.seed, 42));
-    const context = {
-      generatedEmails: [],
-      patterns: datasetSpec?.generator?.patterns ?? datasetSpec?.patterns ?? {},
-      random,
-    };
-    const writeRecord = await createRecordWriter(client, storageSpec);
-    const startPct = 18;
-    const loadSpan = 74;
 
     if (!totalRecords) {
       onProgress?.({
@@ -430,24 +632,21 @@ export async function loadDatasetIntoRedis({
       });
     }
 
-    for (let offset = 0; offset < totalRecords; offset += batchSize) {
-      const size = Math.min(batchSize, totalRecords - offset);
-      const commands = [];
-
-      for (let index = 0; index < size; index += 1) {
-        const recordIndex = offset + index;
-        const record = buildRecord(datasetSpec, recordIndex, context);
-        commands.push(writeRecord(record, recordIndex));
-      }
-
-      await Promise.all(commands);
-
-      const completed = Math.min(totalRecords, offset + size);
-      const progressPct = startPct + (completed / totalRecords) * loadSpan;
+    if (totalRecords) {
       onProgress?.({
         status: 'running',
-        progressPct,
-        message: `Loading dataset (${completed.toLocaleString()} / ${totalRecords.toLocaleString()})`,
+        progressPct: 18,
+        message: `Loading dataset with ${parallelism} loader ${parallelism === 1 ? 'client' : 'clients'}`,
+      });
+
+      await loadRecordsInParallel({
+        batchSize,
+        datasetSpec,
+        onProgress,
+        parallelism,
+        storageSpec,
+        target,
+        totalRecords,
       });
     }
 
@@ -475,10 +674,6 @@ export async function loadDatasetIntoRedis({
       totalRecords,
     };
   } finally {
-    if (client.isOpen) {
-      await client.disconnect().catch(() => {});
-    } else if (typeof client.destroy === 'function') {
-      client.destroy();
-    }
+    await closeRedisClient(client);
   }
 }

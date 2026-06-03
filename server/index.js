@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,6 +19,7 @@ import {
 } from './preset-library.js';
 import { buildRedisUrl, normalizeRedisTarget } from './redis-target.js';
 import { buildRunnableScenario } from './scenarios.js';
+import { detectDatabaseConnectionDetails } from '../shared/database-source.js';
 import {
   appendLog,
   clearRuns,
@@ -55,6 +57,7 @@ import {
   STATSD_HOST,
   STATSD_PORT,
 } from './memtier.js';
+import { parseMemtierProgressPercent } from './memtier-summary.js';
 import {
   createRedisInsightProxyHandler,
   createRedisInsightService,
@@ -73,10 +76,10 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(projectRoot, 'dist');
 const REDIS_CONNECT_TIMEOUT_MS = 3000;
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
 const APP_PORT = Number(process.env.PORT ?? 3000);
 const APP_URL = `http://127.0.0.1:${APP_PORT}`;
-const MAX_CONNECTIONS = 3;
+const MAX_CONNECTIONS = 4;
 const DEFAULT_REDIS_HOST = process.env.MEMVIZ_DEFAULT_REDIS_HOST ?? '127.0.0.1';
 const DEFAULT_REDIS_PORT = process.env.MEMVIZ_DEFAULT_REDIS_PORT ?? '6379';
 const REDISINSIGHT_CONFIG = getRedisInsightConfig(process.env);
@@ -99,6 +102,11 @@ const FATAL_MEMTIER_PATTERNS = [
     regex: /syntax error at offset/i,
     message: (line) =>
       `Redis rejected the benchmark command syntax: ${line}. This usually means the query syntax or index field type does not match the benchmark command.`,
+  },
+  {
+    regex: /cluster slot failed/i,
+    message: (line) =>
+      `Cluster Aware requires a Redis Cluster target. Memtier could not read cluster slots from Redis: ${line}`,
   },
 ];
 
@@ -178,6 +186,52 @@ function classifyFatalMemtierLine(text) {
   return null;
 }
 
+function recordMemtierProgressLine(runId, text) {
+  const progressPercent = parseMemtierProgressPercent(text);
+  if (progressPercent === null) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const run = recordMetric(runId, {
+    metric: 'progress_pct',
+    value: progressPercent,
+    timestamp,
+  });
+  if (!run) {
+    return;
+  }
+
+  broadcast({
+    type: 'metric',
+    runId,
+    metric: 'progress_pct',
+    value: progressPercent,
+    metrics: run.metrics,
+    series: run.series,
+    timestamp,
+  });
+}
+
+async function readRedisServerInfo(client) {
+  let timeoutId;
+
+  try {
+    return await Promise.race([
+      client.info('server'),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('Redis INFO timed out.'));
+        }, 800);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function verifyRedisConnection(target) {
   const client = createClient({
     url: buildRedisUrl(target),
@@ -207,6 +261,8 @@ async function verifyRedisConnection(target) {
     if (response !== 'PONG') {
       throw new Error('Redis did not return PONG.');
     }
+
+    return await readRedisServerInfo(client);
   } catch (error) {
     const wrappedError = new Error(`Could not connect to Redis at ${target.summary}. ${error.message}`);
     wrappedError.kind = error.kind ?? 'connection';
@@ -264,11 +320,17 @@ async function bootstrapDefaultConnectionIfAvailable() {
 
   try {
     const target = normalizeRedisTarget(DEFAULT_TARGET_INPUT);
-    await verifyRedisConnection(target);
+    const serverInfo = await verifyRedisConnection(target);
+    const { databaseSource, databaseVersion } = detectDatabaseConnectionDetails({
+      host: target.host,
+      serverInfo,
+    });
     const connection = createConnection({
       id: randomUUID(),
       name: DEFAULT_TARGET_NAME,
       target,
+      databaseSource,
+      databaseVersion,
     });
     broadcastState();
     void startConnectionRttProbe(connection.id);
@@ -568,9 +630,41 @@ function toPublicState() {
   };
 }
 
-function terminateChildProcess(child) {
+function runCleanupCommand(cleanupCommand) {
+  if (!cleanupCommand) {
+    return Promise.resolve();
+  }
+
   return new Promise((resolve) => {
-    if (!child || child.exitCode !== null || child.killed) {
+    const cleanup = spawn(cleanupCommand.command, cleanupCommand.args, {
+      env: process.env,
+      stdio: 'ignore',
+    });
+    const timeoutId = setTimeout(() => {
+      cleanup.kill('SIGKILL');
+      resolve();
+    }, 2500);
+
+    cleanup.on('error', () => {
+      clearTimeout(timeoutId);
+      resolve();
+    });
+    cleanup.on('close', () => {
+      clearTimeout(timeoutId);
+      resolve();
+    });
+  });
+}
+
+async function terminateChildProcess(child) {
+  if (!child) {
+    return;
+  }
+
+  await runCleanupCommand(child.cleanupCommand);
+
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
       resolve();
       return;
     }
@@ -595,7 +689,7 @@ function terminateChildProcess(child) {
     }
 
     setTimeout(() => {
-      if (settled || child.exitCode !== null || child.killed) {
+      if (settled || child.exitCode !== null || child.signalCode !== null) {
         finish();
         return;
       }
@@ -768,11 +862,17 @@ app.post('/api/connect', async (req, res) => {
 
   try {
     const target = normalizeRedisTarget(req.body);
-    await verifyRedisConnection(target);
+    const serverInfo = await verifyRedisConnection(target);
+    const { databaseSource, databaseVersion } = detectDatabaseConnectionDetails({
+      host: target.host,
+      serverInfo,
+    });
     const connection = createConnection({
       id: randomUUID(),
       name: req.body?.name,
       target,
+      databaseSource,
+      databaseVersion,
     });
 
     const state = toPublicState();
@@ -1036,7 +1136,7 @@ app.post('/api/run', async (req, res) => {
 
   const runs = await Promise.all(connections.map(async (connection) => {
     const runId = randomUUID();
-    const { command, args, displayCommand, runtime: runtimeDetails } = await buildMemtierCommand({
+    const { command, args, cleanupCommand, displayCommand, runtime: runtimeDetails } = await buildMemtierCommand({
       runLabel: runId,
       runtime,
       scenario,
@@ -1096,6 +1196,9 @@ app.post('/api/run', async (req, res) => {
         if (stream === 'stdout') {
           recordSummaryLine(runId, text);
         }
+        if (stream === 'stderr' && !fatalAbortMessage) {
+          recordMemtierProgressLine(runId, text);
+        }
         if (entry) {
           broadcast({
             type: 'log',
@@ -1127,14 +1230,7 @@ app.post('/api/run', async (req, res) => {
               error: classifiedError,
             });
 
-            if (child && !child.killed) {
-              child.kill('SIGTERM');
-              setTimeout(() => {
-                if (!child.killed) {
-                  child.kill('SIGKILL');
-                }
-              }, 1000).unref();
-            }
+            void terminateChildProcess(child);
           }
         }
       },
@@ -1177,6 +1273,7 @@ app.post('/api/run', async (req, res) => {
       },
     });
 
+    child.cleanupCommand = cleanupCommand;
     runningMemtierChildren.set(runId, child);
 
     return serializeRun(run);
@@ -1215,6 +1312,35 @@ app.post('/api/run/cancel', async (_req, res) => {
     success: true,
     canceledRunIds: runIds,
     state: toPublicState(),
+  });
+});
+
+app.delete('/api/run/:id', (req, res) => {
+  const run = getRun(req.params.id);
+
+  if (!run) {
+    res.status(404).json({
+      success: false,
+      error: 'Run not found.',
+    });
+    return;
+  }
+
+  if (run.status === 'running') {
+    res.status(409).json({
+      success: false,
+      error: 'Stop the active benchmark before deleting it.',
+    });
+    return;
+  }
+
+  removeRuns([run.id]);
+  const state = toPublicState();
+  broadcastState();
+  res.json({
+    success: true,
+    deletedRunId: run.id,
+    state,
   });
 });
 

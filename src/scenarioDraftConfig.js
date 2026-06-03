@@ -21,7 +21,15 @@ export function applyScenarioDraftConfigChange(config, scenario, field, nextValu
     };
   }
 
-  if (field === 'rateLimitEnabled' || field === 'command' || field === 'keyPrefix') {
+  if (
+    field === 'rateLimitEnabled' ||
+    field === 'clusterModeEnabled' ||
+    field === 'distinctClientSeed' ||
+    field === 'command' ||
+    field === 'commandKeyPattern' ||
+    field === 'keyPrefix' ||
+    field === 'memtierAdvanced'
+  ) {
     return {
       ...config,
       [field]: nextValue,
@@ -79,6 +87,22 @@ export function applyScenarioDraftConfigChange(config, scenario, field, nextValu
     } else {
       nextConfig.clientsStart = Math.max(1, clampedValue - 1);
     }
+  }
+
+  if (
+    field === 'keyMinimum' &&
+    Number.isInteger(nextConfig.keyMaximum) &&
+    nextConfig.keyMinimum > nextConfig.keyMaximum
+  ) {
+    nextConfig.keyMaximum = nextConfig.keyMinimum;
+  }
+
+  if (
+    field === 'keyMaximum' &&
+    Number.isInteger(nextConfig.keyMinimum) &&
+    nextConfig.keyMaximum < nextConfig.keyMinimum
+  ) {
+    nextConfig.keyMinimum = nextConfig.keyMaximum;
   }
 
   return nextConfig;

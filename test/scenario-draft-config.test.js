@@ -15,6 +15,8 @@ const scenario = {
     clientsStart: { min: 1, max: 200 },
     clientsStep: { min: 1, max: 200 },
     stepDuration: { min: 1, max: 300 },
+    keyMinimum: { min: 0, max: 1000000000 },
+    keyMaximum: { min: 0, max: 1000000000 },
   },
 };
 
@@ -57,6 +59,36 @@ test('switching to request mode disables staircase', () => {
   assert.equal(nextConfig.staircaseEnabled, false);
 });
 
+test('toggling cluster mode updates the draft config', () => {
+  const nextConfig = applyScenarioDraftConfigChange(
+    {
+      clusterModeEnabled: false,
+    },
+    scenario,
+    'clusterModeEnabled',
+    true,
+  );
+
+  assert.equal(nextConfig.clusterModeEnabled, true);
+});
+
+test('updating memtier advanced options preserves structured entries', () => {
+  const nextConfig = applyScenarioDraftConfigChange(
+    {
+      memtierAdvanced: {},
+    },
+    scenario,
+    'memtierAdvanced',
+    {
+      hideHistogram: { enabled: true },
+    },
+  );
+
+  assert.deepEqual(nextConfig.memtierAdvanced, {
+    hideHistogram: { enabled: true },
+  });
+});
+
 test('shrinking final clients keeps staircase start below target', () => {
   const nextConfig = applyScenarioDraftConfigChange(
     {
@@ -74,6 +106,21 @@ test('shrinking final clients keeps staircase start below target', () => {
 
   assert.equal(nextConfig.clients, 6);
   assert.equal(nextConfig.clientsStart, 5);
+});
+
+test('raising key minimum keeps key range valid', () => {
+  const nextConfig = applyScenarioDraftConfigChange(
+    {
+      keyMinimum: 1,
+      keyMaximum: 100,
+    },
+    scenario,
+    'keyMinimum',
+    200,
+  );
+
+  assert.equal(nextConfig.keyMinimum, 200);
+  assert.equal(nextConfig.keyMaximum, 200);
 });
 
 test('load profile summary includes staircase wording', () => {

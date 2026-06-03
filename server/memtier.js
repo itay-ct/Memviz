@@ -208,8 +208,13 @@ function buildLocalCommand({ runLabel, scenario, target }) {
   };
 }
 
+function buildDockerContainerName(runLabel) {
+  return `memviz-${String(runLabel).replace(/[^a-zA-Z0-9_.-]/g, '-')}`;
+}
+
 async function buildDockerCommand({ runLabel, scenario, target }) {
   const dockerHostAddress = await resolveDockerHostAddress();
+  const containerName = buildDockerContainerName(runLabel);
   const dockerTarget = toDockerReachableTarget(target, dockerHostAddress);
   const containerArgs = buildInnerMemtierArgs({
     runLabel,
@@ -231,10 +236,20 @@ async function buildDockerCommand({ runLabel, scenario, target }) {
     ...scenario.memtierArgs,
   ];
 
-  const args = ['run', '--rm', ...getDockerHostFlags(), DOCKER_IMAGE, ...containerArgs];
+  const args = [
+    'run',
+    '--rm',
+    '--name',
+    containerName,
+    ...getDockerHostFlags(),
+    DOCKER_IMAGE,
+    ...containerArgs,
+  ];
   const displayArgs = [
     'run',
     '--rm',
+    '--name',
+    containerName,
     ...getDockerHostFlags(),
     DOCKER_IMAGE,
     ...displayContainerArgs,
@@ -248,6 +263,10 @@ async function buildDockerCommand({ runLabel, scenario, target }) {
     command: 'docker',
     args,
     displayCommand: `docker ${displayArgs.map((arg) => shellQuote(arg)).join(' ')}`,
+    cleanupCommand: {
+      command: 'docker',
+      args: ['rm', '-f', containerName],
+    },
   };
 }
 

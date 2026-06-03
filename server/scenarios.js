@@ -3,6 +3,11 @@ import {
   formatLoadProfileSummary,
   hasStaircaseProfile,
 } from '../shared/scenario-load-profile.js';
+import {
+  buildMemtierAdvancedArgs,
+  countEnabledMemtierAdvancedOptions,
+  normalizeMemtierAdvancedOptions,
+} from '../shared/memtier-options.js';
 
 function formatCompactInteger(value) {
   if (value >= 1000000) {
@@ -38,12 +43,14 @@ const sharedLimits = {
   requestCount: { min: 1, max: 1000000, step: 100, label: 'Requests / client' },
   rateLimit: { min: 1000, max: 100000, step: 1000, label: 'Rate limit / sec' },
   pipeline: { min: 1, max: 500, step: 1, label: 'Pipeline' },
+  keyMinimum: { min: 0, max: 1000000000, step: 1, label: 'Key minimum' },
+  keyMaximum: { min: 0, max: 1000000000, step: 1, label: 'Key maximum' },
   setRatio: { min: 1, max: 20, step: 1, label: 'Set ratio' },
   getRatio: { min: 1, max: 100, step: 1, label: 'Get ratio' },
   dataSize: { min: 16, max: 8192, step: 16, label: 'Value bytes' },
 };
 
-function buildScenarioLimits(kind) {
+function buildScenarioLimits(kind, { includeKeyRange = false } = {}) {
   const limits = {
     clients: sharedLimits.clients,
     clientsStart: sharedLimits.clientsStart,
@@ -56,6 +63,11 @@ function buildScenarioLimits(kind) {
     pipeline: sharedLimits.pipeline,
   };
 
+  if (includeKeyRange) {
+    limits.keyMinimum = sharedLimits.keyMinimum;
+    limits.keyMaximum = sharedLimits.keyMaximum;
+  }
+
   if (kind === 'workload') {
     limits.setRatio = sharedLimits.setRatio;
     limits.getRatio = sharedLimits.getRatio;
@@ -63,6 +75,18 @@ function buildScenarioLimits(kind) {
   }
 
   return limits;
+}
+
+function formatKeyRangeLabel(config) {
+  if (!Number.isInteger(config?.keyMinimum) || !Number.isInteger(config?.keyMaximum)) {
+    return null;
+  }
+
+  if (config.keyMinimum === config.keyMaximum) {
+    return `key ${formatCompactInteger(config.keyMinimum)}`;
+  }
+
+  return `keys ${formatCompactInteger(config.keyMinimum)}-${formatCompactInteger(config.keyMaximum)}`;
 }
 
 function scenarioDescription(config, kind) {
@@ -73,6 +97,7 @@ function scenarioDescription(config, kind) {
   const rateLimitLabel = config.rateLimitEnabled
     ? `cap ${formatCompactInteger(config.rateLimit)}/s`
     : null;
+  const advancedOptionCount = countEnabledMemtierAdvancedOptions(config.memtierAdvanced);
 
   const shapeLabel =
     kind === 'command'
@@ -85,9 +110,14 @@ function scenarioDescription(config, kind) {
     `${config.threads} threads`,
     durationLabel,
     `pipe ${config.pipeline}`,
+    config.clusterModeEnabled ? 'cluster aware' : null,
     `prefix ${config.keyPrefix}`,
+    formatKeyRangeLabel(config),
+    config.commandKeyPattern ? `pattern ${config.commandKeyPattern}` : null,
+    config.distinctClientSeed ? 'distinct client seeds' : null,
     shapeLabel,
     rateLimitLabel,
+    advancedOptionCount ? `${advancedOptionCount} advanced memtier` : null,
   ]
     .filter(Boolean)
     .join(' • ');
@@ -176,6 +206,15 @@ function requireNonEmptyString(value, message) {
   return normalized;
 }
 
+function normalizeCommandKeyPattern(value, fallback = 'R') {
+  const normalized = normalizeString(value, fallback).trim().toUpperCase();
+  if (!['G', 'R', 'Z', 'S', 'P'].includes(normalized)) {
+    throw createValidationError('Command key pattern must be one of G, R, Z, S, or P.');
+  }
+
+  return normalized;
+}
+
 function escapeTagValue(value) {
   return String(value ?? '').replace(/([@.])/g, '\\$1');
 }
@@ -218,6 +257,14 @@ function validateScenarioDefaults(kind, defaults, limits) {
 
   if (kind === 'command' && !defaults.command) {
     throw createValidationError('Command is required.');
+  }
+
+  if (
+    Number.isInteger(defaults.keyMinimum) &&
+    Number.isInteger(defaults.keyMaximum) &&
+    defaults.keyMinimum > defaults.keyMaximum
+  ) {
+    throw createValidationError('Key minimum must be less than or equal to key maximum.');
   }
 
   if (hasStaircaseProfile(defaults)) {
@@ -278,8 +325,13 @@ export function normalizeScenarioDefinition(input = {}) {
     throw createValidationError('Scenario kind must be workload or command.');
   }
 
-  const limits = buildScenarioLimits(kind);
   const rawDefaults = input.defaults ?? {};
+  const includeKeyRange =
+    hasOwnValue(rawDefaults, 'keyMinimum') ||
+    hasOwnValue(rawDefaults, 'key_minimum') ||
+    hasOwnValue(rawDefaults, 'keyMaximum') ||
+    hasOwnValue(rawDefaults, 'key_maximum');
+  const limits = buildScenarioLimits(kind, { includeKeyRange });
   const defaults = {
     clients: normalizeInteger(rawDefaults.clients, 1),
     clientsStart: normalizeInteger(rawDefaults.clientsStart ?? rawDefaults.clients_start, 1),
@@ -293,16 +345,37 @@ export function normalizeScenarioDefinition(input = {}) {
       rawDefaults.staircaseEnabled ?? rawDefaults.staircase_enabled,
       false,
     ),
+    clusterModeEnabled: normalizeBoolean(
+      rawDefaults.clusterModeEnabled ?? rawDefaults.cluster_mode_enabled,
+      false,
+    ),
     rateLimitEnabled: normalizeBoolean(rawDefaults.rateLimitEnabled, false),
     rateLimit: normalizeInteger(rawDefaults.rateLimit, 20000),
     pipeline: normalizeInteger(rawDefaults.pipeline, 1),
     keyPrefix: requireNonEmptyString(rawDefaults.keyPrefix ?? 'memtier-', 'Key prefix is required.'),
+    distinctClientSeed: normalizeBoolean(
+      rawDefaults.distinctClientSeed ?? rawDefaults.distinct_client_seed,
+      false,
+    ),
+    memtierAdvanced: normalizeMemtierAdvancedOptions(
+      rawDefaults.memtierAdvanced ?? rawDefaults.memtier_advanced ?? {},
+    ),
   };
+
+  if (includeKeyRange) {
+    defaults.keyMinimum = normalizeInteger(rawDefaults.keyMinimum ?? rawDefaults.key_minimum, 0);
+    defaults.keyMaximum = normalizeInteger(rawDefaults.keyMaximum ?? rawDefaults.key_maximum, 10000000);
+  }
 
   if (kind === 'command') {
     defaults.command = normalizeSearchCommandSyntax(
       requireNonEmptyString(rawDefaults.command, 'Command is required.'),
     );
+    if (hasOwnValue(rawDefaults, 'commandKeyPattern') || hasOwnValue(rawDefaults, 'command_key_pattern')) {
+      defaults.commandKeyPattern = normalizeCommandKeyPattern(
+        rawDefaults.commandKeyPattern ?? rawDefaults.command_key_pattern,
+      );
+    }
   } else {
     defaults.setRatio = normalizeInteger(rawDefaults.setRatio, 1);
     defaults.getRatio = normalizeInteger(rawDefaults.getRatio, 10);
@@ -338,17 +411,34 @@ export function normalizeScenarioConfig(scenario, input = {}) {
       input.staircaseEnabled ?? input.staircase_enabled,
       scenario.defaults.staircaseEnabled ?? false,
     ),
+    clusterModeEnabled: normalizeBoolean(
+      input.clusterModeEnabled ?? input.cluster_mode_enabled,
+      scenario.defaults.clusterModeEnabled ?? false,
+    ),
     rateLimitEnabled: normalizeBoolean(
       input.rateLimitEnabled,
       scenario.defaults.rateLimitEnabled ?? false,
     ),
+    distinctClientSeed: normalizeBoolean(
+      input.distinctClientSeed ?? input.distinct_client_seed,
+      scenario.defaults.distinctClientSeed ?? false,
+    ),
     keyPrefix: normalizeString(input.keyPrefix, scenario.defaults.keyPrefix).trim(),
+    memtierAdvanced: normalizeMemtierAdvancedOptions(
+      input.memtierAdvanced ?? input.memtier_advanced ?? scenario.defaults.memtierAdvanced ?? {},
+    ),
   };
 
   if (scenario.kind === 'command') {
     config.command = normalizeSearchCommandSyntax(
       normalizeString(input.command, scenario.defaults.command),
     );
+    if (scenario.defaults.commandKeyPattern || input.commandKeyPattern || input.command_key_pattern) {
+      config.commandKeyPattern = normalizeCommandKeyPattern(
+        input.commandKeyPattern ?? input.command_key_pattern,
+        scenario.defaults.commandKeyPattern ?? 'R',
+      );
+    }
   }
 
   if (!['time', 'requests'].includes(config.limitMode)) {
@@ -374,6 +464,14 @@ export function normalizeScenarioConfig(scenario, input = {}) {
     throw createValidationError('Command is required.');
   }
 
+  if (
+    Number.isInteger(config.keyMinimum) &&
+    Number.isInteger(config.keyMaximum) &&
+    config.keyMinimum > config.keyMaximum
+  ) {
+    throw createValidationError('Key minimum must be less than or equal to key maximum.');
+  }
+
   validateStaircaseInput(input, config);
 
   return config;
@@ -393,8 +491,23 @@ export function buildMemtierArgsFromConfig(scenario, config) {
     config.keyPrefix,
   ];
 
+  if (config.clusterModeEnabled) {
+    args.push('--cluster-mode');
+  }
+
+  if (Number.isInteger(config.keyMinimum)) {
+    args.push('--key-minimum', String(config.keyMinimum));
+  }
+
+  if (Number.isInteger(config.keyMaximum)) {
+    args.push('--key-maximum', String(config.keyMaximum));
+  }
+
   if (scenario.kind === 'command') {
     args.push('--command', config.command, '--command-stats-breakdown', 'line');
+    if (config.commandKeyPattern) {
+      args.push('--command-key-pattern', config.commandKeyPattern);
+    }
   } else {
     args.push(
       '--ratio',
@@ -424,6 +537,12 @@ export function buildMemtierArgsFromConfig(scenario, config) {
   if (config.rateLimitEnabled) {
     args.push('--rate-limiting', String(config.rateLimit));
   }
+
+  if (config.distinctClientSeed) {
+    args.push('--distinct-client-seed');
+  }
+
+  args.push(...buildMemtierAdvancedArgs(config.memtierAdvanced));
 
   return args;
 }

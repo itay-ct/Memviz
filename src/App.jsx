@@ -38,6 +38,12 @@ import {
   getReachedClientsPerThreadAtTime,
   hasStaircaseProfile,
 } from '../shared/scenario-load-profile.js';
+import {
+  detectDatabaseSourceFromHost,
+  getDatabaseEngineLabel,
+  getDatabaseSourceDisplayLabel,
+  normalizeDatabaseSource,
+} from '../shared/database-source.js';
 
 function CheckIcon() {
   return (
@@ -95,6 +101,36 @@ function MoreIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="trash-icon" viewBox="0 0 16 16">
+      <path
+        d="M5.25 4.25V3.4c0-.7.48-1.15 1.2-1.15h3.1c.72 0 1.2.45 1.2 1.15v.85"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M3.35 4.45h9.3M4.55 6l.45 6.15c.05.78.55 1.2 1.3 1.2h3.4c.75 0 1.25-.42 1.3-1.2L11.45 6"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M6.85 7.05v4.05M9.15 7.05v4.05"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+    </svg>
+  );
+}
+
 const DEFAULT_FORM = {
   hostOrUrl: '127.0.0.1',
   port: '6379',
@@ -124,7 +160,7 @@ const EMPTY_APP_STATE = {
 };
 
 const EMPTY_META = {
-  appVersion: '1.3.1',
+  appVersion: '1.4.0',
   appPort: 3000,
   appUrl: 'http://127.0.0.1:3000',
   memtier: {
@@ -153,7 +189,11 @@ const EMPTY_SETUP_STATE = {
   logs: [],
 };
 
-const COMPARE_CHART_COLORS = ['#81DBFF', '#C895E3', '#DDFF21'];
+const COMPARE_ENGINE_COLORS = {
+  redis: ['#FF4438', '#FF9F1C', '#F72585', '#FFD166'],
+  valkey: ['#667EFF', '#00C2FF', '#B967FF', '#2DD4BF'],
+};
+const COMPARE_FALLBACK_COLORS = ['#81DBFF', '#C895E3', '#DDFF21', '#FFB86B', '#7ED7A5'];
 const CUSTOM_DATASET_PRESET = {
   id: 'custom',
   name: 'Custom...',
@@ -271,16 +311,14 @@ function validateConnectionForm(formState) {
       if (!parsedUrl.hostname) {
         return 'Redis URL must include a host.';
       }
-
-      return '';
     } catch {
       return 'Enter a valid Redis URL.';
     }
-  }
-
-  const port = Number(formState.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return 'Enter a valid Redis port.';
+  } else {
+    const port = Number(formState.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return 'Enter a valid Redis port.';
+    }
   }
 
   return '';
@@ -687,6 +725,18 @@ function formatKeyPrefixSummary(config) {
   return config.keyPrefix ?? '—';
 }
 
+function formatKeyRangeSummary(config) {
+  if (!Number.isInteger(config.keyMinimum) || !Number.isInteger(config.keyMaximum)) {
+    return null;
+  }
+
+  if (config.keyMinimum === config.keyMaximum) {
+    return `key ${formatCompactInteger(config.keyMinimum)}`;
+  }
+
+  return `keys ${formatCompactInteger(config.keyMinimum)}-${formatCompactInteger(config.keyMaximum)}`;
+}
+
 function formatDataSizeSummary(config) {
   if (config.dataSize === null || config.dataSize === undefined) {
     return '—';
@@ -709,7 +759,11 @@ function describeDraftConfig(config) {
     `${config.threads} threads`,
     formatRunLimit(config),
     `pipe ${config.pipeline}`,
+    config.clusterModeEnabled ? 'cluster aware' : null,
     `prefix ${formatKeyPrefixSummary(config)}`,
+    formatKeyRangeSummary(config),
+    config.commandKeyPattern ? `pattern ${config.commandKeyPattern}` : null,
+    config.distinctClientSeed ? 'distinct client seeds' : null,
     describeScenarioShape(config),
     config.rateLimitEnabled ? `cap ${formatRateLimit(config.rateLimit)}` : null,
   ]
@@ -717,8 +771,8 @@ function describeDraftConfig(config) {
     .join(' • ');
 }
 
-function describeDraftSummary(config, run) {
-  return [run?.connectionName ?? null, describeDraftConfig(config)].filter(Boolean).join(' • ');
+function describeDraftSummary(config) {
+  return describeDraftConfig(config);
 }
 
 function buildDefaultDraftName(scenarioName, number) {
@@ -1002,9 +1056,9 @@ function getGeneratedDatasetDetails(run, scenario, config) {
       label: 'Generated data',
       tooltip: [
         'Request-based write estimate.',
-        `Formula: data size × writes per client × total clients`,
-        `= ${config.dataSize} B × ${writesPerClient.toFixed(0)} × ${totalClients}`,
-        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+        'Formula: data size × writes per client × total clients',
+        '= ' + config.dataSize + ' B × ' + writesPerClient.toFixed(0) + ' × ' + totalClients,
+        'Write ratio: ' + config.setRatio + ':' + config.getRatio,
       ].join('\n'),
     };
   }
@@ -1035,75 +1089,13 @@ function getGeneratedDatasetDetails(run, scenario, config) {
       tooltip: [
         'Time-based generated data.',
         'Formula: data size × average ops/sec × duration × write ratio',
-        `= ${config.dataSize} B × ${averageThroughput.toFixed(0)} × ${durationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
-        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+        '= ' + config.dataSize + ' B × ' + averageThroughput.toFixed(0) + ' × ' + durationSeconds.toFixed(1) + 's × ' + (writeRatio * 100).toFixed(0) + '%',
+        'Write ratio: ' + config.setRatio + ':' + config.getRatio,
       ].join('\n'),
     };
   }
 
-  const configuredDurationSeconds = Number(config.testTime ?? scenario?.defaults?.testTime ?? NaN);
-  const hasConfiguredDuration =
-    configuredDurationSeconds !== null &&
-    configuredDurationSeconds !== undefined &&
-    !Number.isNaN(configuredDurationSeconds);
-  const configuredRateLimit = Number(config.rateLimit ?? NaN);
-  const estimatedScenarioThroughput = Number(scenario?.estimatedOpsPerSec ?? NaN);
-  let estimatedThroughput = null;
-
-  if (config.rateLimitEnabled && !Number.isNaN(configuredRateLimit)) {
-    estimatedThroughput = !Number.isNaN(estimatedScenarioThroughput)
-      ? Math.min(configuredRateLimit, estimatedScenarioThroughput)
-      : configuredRateLimit;
-  } else if (!Number.isNaN(estimatedScenarioThroughput)) {
-    estimatedThroughput = estimatedScenarioThroughput;
-  }
-
-  const staircaseAdjustedThroughput = hasStaircaseProfile(config)
-    ? estimateStaircaseThroughput(estimatedThroughput, config)
-    : estimatedThroughput;
-
-  const hasEstimatedThroughput =
-    staircaseAdjustedThroughput !== null &&
-    staircaseAdjustedThroughput !== undefined &&
-    !Number.isNaN(staircaseAdjustedThroughput);
-
-  if (hasConfiguredDuration && hasEstimatedThroughput) {
-    const bytes = config.dataSize * staircaseAdjustedThroughput * configuredDurationSeconds * writeRatio;
-    const averageActiveClients = estimateAverageActiveClientsPerThread(config);
-    const throughputSource = config.rateLimitEnabled
-      ? !Number.isNaN(estimatedScenarioThroughput)
-        ? `min(rate limit ${configuredRateLimit.toFixed(0)} ops/sec, preset estimate ${estimatedScenarioThroughput.toFixed(0)} ops/sec)`
-        : `rate limit ${configuredRateLimit.toFixed(0)} ops/sec`
-      : `preset estimate ${estimatedThroughput.toFixed(0)} ops/sec`;
-    const approximationLine =
-      hasStaircaseProfile(config) && averageActiveClients
-        ? `Approximation: staircase average ${averageActiveClients.toFixed(1)} of ${config.clients} clients/thread.`
-        : null;
-
-    return {
-      bytes,
-      label: 'Estimated data',
-      tooltip: [
-        hasStaircaseProfile(config)
-          ? 'Approximate pre-run estimate for this staircase workload.'
-          : 'Pre-run estimate for this time-based write workload.',
-        'Formula: data size × estimated ops/sec × duration × write ratio',
-        `= ${config.dataSize} B × ${staircaseAdjustedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
-        `Throughput source: ${throughputSource}`,
-        approximationLine,
-        `Write ratio: ${config.setRatio}:${config.getRatio}`,
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    };
-  }
-
-  return {
-    bytes: null,
-    label: 'Generated data',
-    tooltip:
-      'Generated data cannot be estimated yet because this time-based write workload has no configured throughput estimate and no live throughput samples yet.',
-  };
+  return getEstimatedGeneratedDatasetDetails(scenario, config);
 }
 
 function getEstimatedGeneratedDatasetDetails(scenario, config) {
@@ -1129,7 +1121,7 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
     if (readOnlyCommands.has(commandKeyword)) {
       return {
         bytes: 0,
-        label: 'Est Generated data',
+        label: 'Estimated data',
         tooltip:
           'This test only runs queries against preexisting data and does not generate any new data in Redis.',
       };
@@ -1137,7 +1129,7 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
 
     return {
       bytes: null,
-      label: 'Est Generated data',
+      label: 'Estimated data',
       tooltip:
         'Estimated generated data is undefined for this command workload because payload size per write cannot be inferred safely from the command alone.',
     };
@@ -1153,7 +1145,7 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
   ) {
     return {
       bytes: null,
-      label: 'Est Generated data',
+      label: 'Estimated data',
       tooltip: 'Estimated generated data is unavailable because one or more workload parameters are missing.',
     };
   }
@@ -1162,7 +1154,7 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
   if (totalRatio <= 0 || config.setRatio <= 0) {
     return {
       bytes: 0,
-      label: 'Est Generated data',
+      label: 'Estimated data',
       tooltip:
         'This workload has no write operations in its command mix, so it is estimated to generate no new Redis data.',
     };
@@ -1172,7 +1164,7 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
   if (totalClients <= 0) {
     return {
       bytes: null,
-      label: 'Est Generated data',
+      label: 'Estimated data',
       tooltip: 'Estimated generated data is unavailable because total client count is not valid.',
     };
   }
@@ -1183,12 +1175,12 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
     const writesPerClient = (config.requestCount ?? 0) * writeRatio;
     return {
       bytes: config.dataSize * writesPerClient * totalClients,
-      label: 'Est Generated data',
+      label: 'Estimated data',
       tooltip: [
-        'Final generated data estimate for this request-based write workload.',
-        `Formula: data size × writes per client × total clients`,
-        `= ${config.dataSize} B × ${writesPerClient.toFixed(0)} × ${totalClients}`,
-        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+        'Request-based generated data estimate.',
+        'Formula: data size × writes per client × total clients',
+        '= ' + config.dataSize + ' B × ' + writesPerClient.toFixed(0) + ' × ' + totalClients,
+        'Write ratio: ' + config.setRatio + ':' + config.getRatio,
       ].join('\n'),
     };
   }
@@ -1199,37 +1191,48 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
     configuredDurationSeconds !== undefined &&
     !Number.isNaN(configuredDurationSeconds);
   const configuredRateLimit = Number(config.rateLimit ?? NaN);
-  const estimatedScenarioThroughput = Number(scenario?.estimatedOpsPerSec ?? NaN);
-  let estimatedThroughput = null;
+  const hasConfiguredRateLimit =
+    config.rateLimitEnabled &&
+    configuredRateLimit !== null &&
+    configuredRateLimit !== undefined &&
+    !Number.isNaN(configuredRateLimit);
 
-  if (config.rateLimitEnabled && !Number.isNaN(configuredRateLimit)) {
-    estimatedThroughput = !Number.isNaN(estimatedScenarioThroughput)
-      ? Math.min(configuredRateLimit, estimatedScenarioThroughput)
-      : configuredRateLimit;
-  } else if (!Number.isNaN(estimatedScenarioThroughput)) {
-    estimatedThroughput = estimatedScenarioThroughput;
+  if (!hasConfiguredDuration) {
+    return {
+      bytes: null,
+      label: 'Estimated data',
+      tooltip: 'Estimated generated data is unavailable because the time limit is missing.',
+    };
   }
 
-  const staircaseAdjustedThroughput = hasStaircaseProfile(config)
-    ? estimateStaircaseThroughput(estimatedThroughput, config)
-    : estimatedThroughput;
+  if (!hasConfiguredRateLimit) {
+    return {
+      bytes: null,
+      label: 'Estimated data',
+      tooltip:
+        'This time-based run has no rate limit, so generated data depends on actual throughput. The app will show Generated data after the run has measurements.',
+    };
+  }
 
+  const targetThroughput = configuredRateLimit * totalClients;
+  const estimatedThroughput = hasStaircaseProfile(config)
+    ? estimateStaircaseThroughput(targetThroughput, config)
+    : targetThroughput;
+  const averageActiveClients = estimateAverageActiveClientsPerThread(config);
   const hasEstimatedThroughput =
-    staircaseAdjustedThroughput !== null &&
-    staircaseAdjustedThroughput !== undefined &&
-    !Number.isNaN(staircaseAdjustedThroughput);
+    estimatedThroughput !== null &&
+    estimatedThroughput !== undefined &&
+    !Number.isNaN(estimatedThroughput);
 
-  if (hasConfiguredDuration && hasEstimatedThroughput) {
-    const bytes = config.dataSize * staircaseAdjustedThroughput * configuredDurationSeconds * writeRatio;
-    const averageActiveClients = estimateAverageActiveClientsPerThread(config);
-    const throughputSource = config.rateLimitEnabled
-      ? !Number.isNaN(estimatedScenarioThroughput)
-        ? `min(rate limit ${configuredRateLimit.toFixed(0)} ops/sec, preset estimate ${estimatedScenarioThroughput.toFixed(0)} ops/sec)`
-        : `rate limit ${configuredRateLimit.toFixed(0)} ops/sec`
-      : `preset estimate ${estimatedThroughput.toFixed(0)} ops/sec`;
+  if (hasEstimatedThroughput) {
+    const bytes = config.dataSize * estimatedThroughput * configuredDurationSeconds * writeRatio;
+    const activeClientLabel =
+      averageActiveClients !== null && averageActiveClients !== undefined && !Number.isNaN(averageActiveClients)
+        ? averageActiveClients.toFixed(1) + ' clients/thread × ' + config.threads + ' threads'
+        : totalClients + ' connections';
     const approximationLine =
       hasStaircaseProfile(config) && averageActiveClients
-        ? `Approximation: staircase average ${averageActiveClients.toFixed(1)} of ${config.clients} clients/thread.`
+        ? 'Approximation: staircase average ' + averageActiveClients.toFixed(1) + ' of ' + config.clients + ' clients/thread.'
         : null;
 
     return {
@@ -1237,13 +1240,13 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
       label: 'Estimated data',
       tooltip: [
         hasStaircaseProfile(config)
-          ? 'Approximate generated data estimate for this staircase workload.'
-          : 'Final generated data estimate for this time-based write workload.',
-        'Formula: data size × estimated ops/sec × duration × write ratio',
-        `= ${config.dataSize} B × ${staircaseAdjustedThroughput.toFixed(0)} × ${configuredDurationSeconds.toFixed(1)}s × ${(writeRatio * 100).toFixed(0)}%`,
-        `Throughput source: ${throughputSource}`,
+          ? 'Rate-limit based generated data estimate for this staircase workload.'
+          : 'Rate-limit based generated data estimate for this time-based workload.',
+        'Memtier rate limiting is per connection.',
+        'Formula: data size × rate limit/connection × active connections × duration × write ratio',
+        '= ' + config.dataSize + ' B × ' + configuredRateLimit.toFixed(0) + '/s × ' + activeClientLabel + ' × ' + configuredDurationSeconds.toFixed(1) + 's × ' + (writeRatio * 100).toFixed(0) + '%',
         approximationLine,
-        `Write ratio: ${config.setRatio}:${config.getRatio}`,
+        'Write ratio: ' + config.setRatio + ':' + config.getRatio,
       ]
         .filter(Boolean)
         .join('\n'),
@@ -1252,9 +1255,8 @@ function getEstimatedGeneratedDatasetDetails(scenario, config) {
 
   return {
     bytes: null,
-    label: 'Est Generated data',
-    tooltip:
-      'Estimated generated data is unavailable because this time-based workload has no configured throughput estimate.',
+    label: 'Estimated data',
+    tooltip: 'Estimated generated data is unavailable because the rate-limit estimate could not be calculated.',
   };
 }
 
@@ -1289,6 +1291,20 @@ function getFinalMetricValue(preferred, fallback = null) {
   return fallback;
 }
 
+function getFinalLatencyValue(preferred, fallback = null) {
+  if (
+    preferred === 0 &&
+    fallback !== null &&
+    fallback !== undefined &&
+    !Number.isNaN(fallback) &&
+    fallback > 0
+  ) {
+    return fallback;
+  }
+
+  return getFinalMetricValue(preferred, fallback);
+}
+
 function getAverageThroughputValue(run) {
   const summaryTotals = run.summary?.results?.totals;
   const throughputSeries = getDisplaySeries(run, 'ops_sec');
@@ -1308,7 +1324,7 @@ function getP99LatencyValue(run) {
     return getFinalMetricValue(rollingP99, run.metrics.latency_p99);
   }
 
-  return getFinalMetricValue(
+  return getFinalLatencyValue(
     summaryTotals?.p99Latency,
     getFinalMetricValue(rollingP99, run.metrics.latency_p99),
   );
@@ -1342,7 +1358,7 @@ function buildAdvancedMetricItems(run) {
   const connectionsSeries = getDisplaySeries(run, 'connections');
   const latencySeries = getDisplaySeries(run, 'latency_ms');
   const averageThroughput = getAverageThroughputValue(run);
-  const p90Latency = getFinalMetricValue(
+  const p90Latency = getFinalLatencyValue(
     summaryTotals?.p90Latency,
     getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
   );
@@ -1374,14 +1390,14 @@ function buildAdvancedMetricItems(run) {
     {
       label: 'Average latency',
       value: formatMetric(
-        getFinalMetricValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
+        getFinalLatencyValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
         formatLatency,
       ),
     },
     {
       label: 'p50 latency',
       value: formatMetric(
-        getFinalMetricValue(summaryTotals?.p50Latency, metrics.latency_p50),
+        getFinalLatencyValue(summaryTotals?.p50Latency, metrics.latency_p50),
         formatLatency,
       ),
     },
@@ -1470,19 +1486,19 @@ function buildLatencySummaryOptions(run) {
     {
       key: 'p50',
       label: 'p50',
-      value: getFinalMetricValue(summaryTotals?.p50Latency, metrics.latency_p50),
+      value: getFinalLatencyValue(summaryTotals?.p50Latency, metrics.latency_p50),
       formatter: formatLatency,
     },
     {
       key: 'average',
       label: 'average',
-      value: getFinalMetricValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
+      value: getFinalLatencyValue(summaryTotals?.avgLatency, metrics.latency_avg_ms),
       formatter: formatLatency,
     },
     {
       key: 'p90',
       label: 'p90',
-      value: getFinalMetricValue(
+      value: getFinalLatencyValue(
         summaryTotals?.p90Latency,
         getFinalMetricValue(metrics.latency_p90, getSeriesPercentile(latencySeries, 90)),
       ),
@@ -1553,9 +1569,9 @@ function getComparisonSnapshot(run, draft) {
             getFinalMetricValue(run.metrics.bytes_sec_avg, getSeriesValueAtEnd(bytesSeries)),
             formatBytesPerSecond,
           ),
-    averageLatency: getFinalMetricValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
-    p50Latency: getFinalMetricValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
-    p90Latency: getFinalMetricValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
+    averageLatency: getFinalLatencyValue(summaryTotals?.avgLatency, run.metrics.latency_avg_ms),
+    p50Latency: getFinalLatencyValue(summaryTotals?.p50Latency, run.metrics.latency_p50),
+    p90Latency: getFinalLatencyValue(summaryTotals?.p90Latency, run.metrics.latency_p90),
     p99Latency: getP99LatencyValue(run),
     hitsSec: summaryTotals?.hitsSec ?? null,
     missesSec: summaryTotals?.missesSec ?? null,
@@ -1780,8 +1796,24 @@ function buildChartData(points) {
   }));
 }
 
-function getCompareColor(index) {
-  return COMPARE_CHART_COLORS[index % COMPARE_CHART_COLORS.length];
+function getCompareColor(engine, engineIndex, fallbackIndex) {
+  const palette = COMPARE_ENGINE_COLORS[engine] ?? null;
+  if (palette?.length) {
+    return palette[engineIndex % palette.length];
+  }
+
+  return COMPARE_FALLBACK_COLORS[fallbackIndex % COMPARE_FALLBACK_COLORS.length];
+}
+
+function buildCompareColorMap(comparedRuns) {
+  const engineCounts = new Map();
+
+  return comparedRuns.map(({ run }, index) => {
+    const { engine } = normalizeDatabaseSource(run?.databaseSource);
+    const engineIndex = engineCounts.get(engine) ?? 0;
+    engineCounts.set(engine, engineIndex + 1);
+    return getCompareColor(engine, engineIndex, index);
+  });
 }
 
 function canCompareRunTimelines(comparedRuns) {
@@ -1872,6 +1904,56 @@ function IconAsset({ className = '', src }) {
   return <img alt="" aria-hidden="true" className={`icon-asset ${className}`.trim()} src={src} />;
 }
 
+function formatDatabaseSourceLabel(source) {
+  return getDatabaseSourceDisplayLabel(source);
+}
+
+function formatDatabaseVersionLabel(source, version) {
+  const trimmedVersion = String(version ?? '').trim();
+  if (!trimmedVersion) {
+    return '';
+  }
+
+  const { engine } = normalizeDatabaseSource(source);
+  const engineLabel = getDatabaseEngineLabel(engine);
+  return formatDatabaseSourceLabel(source) === engineLabel
+    ? trimmedVersion
+    : engineLabel + ' ' + trimmedVersion;
+}
+
+function DatabaseSourceBadge({ className = '', source, version = null }) {
+  const sourceLabel = formatDatabaseSourceLabel(source);
+  const versionLabel = formatDatabaseVersionLabel(source, version);
+  const label = [sourceLabel, versionLabel].filter(Boolean).join(' · ');
+
+  return (
+    <span className={('database-source-badge ' + className).trim()} title={label}>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function getDatabaseSourcePreviewLabel(hostOrUrl) {
+  const source = detectDatabaseSourceFromHost(hostOrUrl);
+  if (source.service === 'self-managed') {
+    return '';
+  }
+
+  return getDatabaseSourceDisplayLabel(source);
+}
+
+function DatabaseSourcePreview({ className = '', formState }) {
+  const label = getDatabaseSourcePreviewLabel(formState.hostOrUrl);
+  if (!label) {
+    return null;
+  }
+
+  return (
+    <span className={('database-source-preview ' + className).trim()}>
+      {label}
+    </span>
+  );
+}
 function ConnectionScreen({
   formState,
   onFormChange,
@@ -1962,6 +2044,8 @@ function ConnectionScreen({
             />
           </label>
 
+          <DatabaseSourcePreview formState={formState} />
+
           {connectError ? <p className="form-error">{connectError}</p> : null}
 
           <button className="primary-button" disabled={connectDisabled} type="submit">
@@ -1979,46 +2063,107 @@ function ConnectionFormPanel({
   formState,
   formError,
   onConnect,
+  onClose,
   onFormChange,
   onHostOrUrlPaste,
 }) {
   return (
-    <form className="topbar-connect-form" onSubmit={onConnect}>
-      <input
-        autoComplete="off"
-        name="hostOrUrl"
-        onChange={onFormChange}
-        onPaste={onHostOrUrlPaste}
-        placeholder="Host or URL"
-        value={formState.hostOrUrl}
-      />
-      <input
-        inputMode="numeric"
-        name="port"
-        onChange={onFormChange}
-        placeholder="Port"
-        value={formState.port}
-      />
-      <input
-        autoComplete="username"
-        name="username"
-        onChange={onFormChange}
-        placeholder="Username"
-        value={formState.username}
-      />
-      <input
-        autoComplete="current-password"
-        name="password"
-        onChange={onFormChange}
-        placeholder="Password"
-        type="password"
-        value={formState.password}
-      />
-      <button className="primary-button" disabled={connectDisabled} type="submit">
-        {connectPending ? 'Connecting…' : 'Connect'}
-      </button>
-      {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
-    </form>
+    <div className="topbar-connect-form-shell">
+      <form className="topbar-connect-form" onSubmit={onConnect}>
+        <div className="topbar-host-source-group">
+          <input
+            autoComplete="off"
+            name="hostOrUrl"
+            onChange={onFormChange}
+            onPaste={onHostOrUrlPaste}
+            placeholder="Host or URL"
+            value={formState.hostOrUrl}
+          />
+          <DatabaseSourcePreview
+            className="topbar-source-preview"
+            formState={formState}
+          />
+        </div>
+        <input
+          inputMode="numeric"
+          name="port"
+          onChange={onFormChange}
+          placeholder="Port"
+          value={formState.port}
+        />
+        <input
+          autoComplete="username"
+          name="username"
+          onChange={onFormChange}
+          placeholder="Username"
+          value={formState.username}
+        />
+        <input
+          autoComplete="current-password"
+          name="password"
+          onChange={onFormChange}
+          placeholder="Password"
+          type="password"
+          value={formState.password}
+        />
+        <div className="topbar-connect-actions">
+          <button className="primary-button" disabled={connectDisabled} type="submit">
+            {connectPending ? 'Connecting…' : 'Connect'}
+          </button>
+          {onClose ? (
+            <button className="ghost-button topbar-close-form-button" onClick={onClose} type="button">
+              Close
+            </button>
+          ) : null}
+        </div>
+        {formError ? <p className="form-error topbar-form-error">{formError}</p> : null}
+      </form>
+    </div>
+  );
+}
+
+function ConnectionModal({
+  connectDisabled,
+  connectPending,
+  formError,
+  formState,
+  onClose,
+  onConnect,
+  onFormChange,
+  onHostOrUrlPaste,
+  open,
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-scrim connection-modal-scrim" onClick={onClose}>
+      <section
+        aria-labelledby="connection-modal-title"
+        aria-modal="true"
+        className="connection-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="connection-modal-header">
+          <div>
+            <p className="eyebrow">Database</p>
+            <h2 id="connection-modal-title">Add connection</h2>
+          </div>
+        </div>
+        <ConnectionFormPanel
+          connectDisabled={connectDisabled}
+          connectPending={connectPending}
+          formError={formError}
+          formState={formState}
+          onClose={onClose}
+          onConnect={onConnect}
+          onFormChange={onFormChange}
+          onHostOrUrlPaste={onHostOrUrlPaste}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -2735,6 +2880,12 @@ function ConnectionCard({
         <p className="connection-load-error">{connection.load.error ?? 'Dataset load failed'}</p>
       ) : null}
 
+      <DatabaseSourceBadge
+        className="connection-source-badge"
+        source={connection.databaseSource}
+        version={connection.databaseVersion}
+      />
+
       <div
         className={`connection-menu-wrap ${showMenu ? 'is-open' : ''}`}
         onClick={(event) => event.stopPropagation()}
@@ -2836,13 +2987,15 @@ function TopBar({
   const setupNote =
     setup.status === 'error' ? 'Setup needs attention' : !setupReady ? 'Preparing memtier' : null;
   const canAddConnection =
-    setupReady && connections.length < 3 && !hasRunningRuns && !hasActiveLoads;
-  const showForm = !connections.length || showAddConnectionForm;
+    setupReady && connections.length < 4 && !hasRunningRuns && !hasActiveLoads;
+  const showInlineForm = !connections.length;
+  const showAddConnectionModal = connections.length > 0 && showAddConnectionForm;
+  const formVisible = showInlineForm || showAddConnectionModal;
   const activePresetName = selectedPresetName || presetOptions[0]?.name || '';
 
   useEffect(() => {
     if (!connections.length) {
-      setShowAddConnectionForm(true);
+      setShowAddConnectionForm(false);
       return;
     }
 
@@ -2850,96 +3003,105 @@ function TopBar({
   }, [connections.length]);
 
   useEffect(() => {
-    onConnectionFormVisibilityChange?.(showForm);
-  }, [onConnectionFormVisibilityChange, showForm]);
+    onConnectionFormVisibilityChange?.(formVisible);
+  }, [formVisible, onConnectionFormVisibilityChange]);
 
   return (
-    <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
-      <div className="topbar-brand">
-        <div className="topbar-brand-mark">
-          <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
+    <>
+      <header className={`topbar ${!connections.length ? 'topbar-disconnected' : ''}`}>
+        <div className="topbar-brand">
+          <div className="topbar-brand-mark">
+            <IconAsset className="topbar-brand-icon" src={databaseDuotoneIcon} />
+          </div>
+          <div className="topbar-brand-copy">
+            <p className="eyebrow">memviz</p>
+            <strong>Redis benchmark workspace</strong>
+            {setupNote ? (
+              <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
+            ) : null}
+            {presetOptions.length ? (
+              <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
+                <span className="topbar-preset-label">Preset</span>
+                <select
+                  id="topbar-preset-select"
+                  className="topbar-preset-select"
+                  disabled={presetSelectionDisabled}
+                  onChange={(event) => onPresetChange(event.target.value)}
+                  value={activePresetName}
+                >
+                  {presetOptions.map((preset) => (
+                    <option key={preset.name} value={preset.name}>
+                      {preset.label}
+                    </option>
+                  ))}
+                  <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
+                </select>
+                <PresetInfoTooltip />
+              </label>
+            ) : null}
+          </div>
         </div>
-        <div className="topbar-brand-copy">
-          <p className="eyebrow">memviz</p>
-          <strong>Redis benchmark workspace</strong>
-          {setupNote ? (
-            <span className={`topbar-brand-note topbar-brand-note-${setup.status}`}>{setupNote}</span>
-          ) : null}
-          {presetOptions.length ? (
-            <label className="topbar-preset-picker" htmlFor="topbar-preset-select">
-              <span className="topbar-preset-label">Preset</span>
-              <select
-                id="topbar-preset-select"
-                className="topbar-preset-select"
-                disabled={presetSelectionDisabled}
-                onChange={(event) => onPresetChange(event.target.value)}
-                value={activePresetName}
-              >
-                {presetOptions.map((preset) => (
-                  <option key={preset.name} value={preset.name}>
-                    {preset.label}
-                  </option>
-                ))}
-                <option value={UPLOAD_PRESET_OPTION}>Load preset file…</option>
-              </select>
-              <PresetInfoTooltip />
-            </label>
+
+        <div className="topbar-connections">
+          {connections.map((connection) => (
+            <ConnectionCard
+              connection={connection}
+              disconnectDisabled={hasRunningRuns || hasActiveLoads}
+              isSelected={connection.id === selectedConnectionId}
+              key={connection.id}
+              loadDisabled={hasRunningRuns || hasActiveLoads}
+              redisInsightActionTitle={redisInsightActionTitle}
+              redisInsightDisabled={redisInsightDisabled}
+              onLoadDataset={onLoadDataset}
+              onDisconnect={onDisconnect}
+              onOpenRedisInsight={onOpenRedisInsight}
+              onRename={onRenameConnection}
+              onSelect={onSelectConnection}
+            />
+          ))}
+
+          {showInlineForm ? (
+            <ConnectionFormPanel
+              connectDisabled={connectDisabled}
+              connectPending={connectPending}
+              formError={connectError || validationError}
+              formState={formState}
+              onConnect={onConnect}
+              onFormChange={onFormChange}
+              onHostOrUrlPaste={onHostOrUrlPaste}
+            />
           ) : null}
         </div>
-      </div>
 
-      <div className="topbar-connections">
-        {connections.map((connection) => (
-          <ConnectionCard
-            connection={connection}
-            disconnectDisabled={hasRunningRuns || hasActiveLoads}
-            isSelected={connection.id === selectedConnectionId}
-            key={connection.id}
-            loadDisabled={hasRunningRuns || hasActiveLoads}
-            redisInsightActionTitle={redisInsightActionTitle}
-            redisInsightDisabled={redisInsightDisabled}
-            onLoadDataset={onLoadDataset}
-            onDisconnect={onDisconnect}
-            onOpenRedisInsight={onOpenRedisInsight}
-            onRename={onRenameConnection}
-            onSelect={onSelectConnection}
-          />
-        ))}
-
-        {showForm ? (
-          <ConnectionFormPanel
-            connectDisabled={connectDisabled}
-            connectPending={connectPending}
-            formState={formState}
-            formError={connectError || validationError}
-            onConnect={onConnect}
-            onFormChange={onFormChange}
-            onHostOrUrlPaste={onHostOrUrlPaste}
-          />
+        {connections.length ? (
+          <div className="topbar-trailing">
+            <button
+              className="ghost-button"
+              disabled={!canAddConnection}
+              onClick={() => {
+                onPrepareAddConnection();
+                setShowAddConnectionForm(true);
+              }}
+              type="button"
+            >
+              Add connection
+            </button>
+          </div>
         ) : null}
-      </div>
+      </header>
 
-      {connections.length ? (
-        <div className="topbar-trailing">
-          <button
-            className="ghost-button"
-            disabled={!canAddConnection}
-            onClick={() =>
-              setShowAddConnectionForm((current) => {
-                const next = !current;
-                if (next) {
-                  onPrepareAddConnection();
-                }
-                return next;
-              })
-            }
-            type="button"
-          >
-            {showForm ? 'Close' : 'Add connection'}
-          </button>
-        </div>
-      ) : null}
-    </header>
+      <ConnectionModal
+        connectDisabled={connectDisabled}
+        connectPending={connectPending}
+        formError={connectError || validationError}
+        formState={formState}
+        onClose={() => setShowAddConnectionForm(false)}
+        onConnect={onConnect}
+        onFormChange={onFormChange}
+        onHostOrUrlPaste={onHostOrUrlPaste}
+        open={showAddConnectionModal}
+      />
+    </>
   );
 }
 
@@ -3382,6 +3544,20 @@ function ConfigTable({
             </div>
           </ConfigRow>
 
+          <ConfigRow label="Cluster">
+            <div className="config-composite-control config-composite-control-paired">
+              <label className="config-checkbox config-checkbox-wide">
+                <input
+                  checked={Boolean(config.clusterModeEnabled)}
+                  disabled={disabled}
+                  onChange={(event) => onConfigChange('clusterModeEnabled', event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Cluster Aware</span>
+              </label>
+            </div>
+          </ConfigRow>
+
           <StaircaseConfigRow label="">
             <div className="config-composite-control config-composite-control-paired">
               <label className="config-checkbox config-checkbox-wide">
@@ -3491,6 +3667,25 @@ function ConfigTable({
             />
           </ConfigRow>
 
+          {scenario.limits.keyMinimum && scenario.limits.keyMaximum ? (
+            <ConfigRow label="Key range">
+              <div className="config-composite-control config-composite-control-paired">
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.keyMinimum}
+                  onChange={(nextValue) => onConfigChange('keyMinimum', nextValue)}
+                  value={config.keyMinimum}
+                />
+                <NumericCellControl
+                  disabled={disabled}
+                  limits={scenario.limits.keyMaximum}
+                  onChange={(nextValue) => onConfigChange('keyMaximum', nextValue)}
+                  value={config.keyMaximum}
+                />
+              </div>
+            </ConfigRow>
+          ) : null}
+
           <ConfigRow label="Pipeline">
             <NumericCellControl
               disabled={disabled}
@@ -3508,6 +3703,23 @@ function ConfigTable({
                 onChange={(nextValue) => onConfigChange('command', nextValue)}
                 placeholder={'FT.SEARCH idx:users "@balance:[9500 +inf]" SORTBY balance DESC LIMIT 0 5000'}
                 value={config.command}
+              />
+            </ConfigRow>
+          ) : null}
+
+          {isCommandScenario && config.commandKeyPattern ? (
+            <ConfigRow label="Key pattern">
+              <ComboButton
+                disabled={disabled}
+                onSelect={(nextValue) => onConfigChange('commandKeyPattern', nextValue)}
+                options={[
+                  { label: 'Random', value: 'R' },
+                  { label: 'Sequential', value: 'S' },
+                  { label: 'Parallel', value: 'P' },
+                  { label: 'Gaussian', value: 'G' },
+                  { label: 'Zipf', value: 'Z' },
+                ]}
+                value={config.commandKeyPattern}
               />
             </ConfigRow>
           ) : null}
@@ -3624,6 +3836,8 @@ function ScenarioCard({
   compareSelectionDisabled,
   config,
   connectionCount,
+  databaseSource,
+  connectionName,
   disabled,
   draft,
   isLaunching,
@@ -3633,6 +3847,7 @@ function ScenarioCard({
   isCustomizing,
   onRename,
   onCancelRun,
+  onDelete,
   selectedConnectionName,
   onSelect,
   onToggleCompareSelection,
@@ -3654,6 +3869,9 @@ function ScenarioCard({
   const [renameValue, setRenameValue] = useState(getDraftName(draft, scenario));
   const [showRunMenu, setShowRunMenu] = useState(false);
   const title = getDraftName(draft, scenario);
+  const titleMeta = [connectionName, databaseSource ? formatDatabaseSourceLabel(databaseSource) : null]
+    .filter(Boolean)
+    .join(' · ');
   const titleEditorRef = useRef(null);
 
   useEffect(() => {
@@ -3736,6 +3954,7 @@ function ScenarioCard({
             ) : (
               <>
                 <strong>{title}</strong>
+                {titleMeta ? <span className="scenario-title-meta">{titleMeta}</span> : null}
                 {run?.status === 'failed' && run?.error ? (
                   <span className="run-warning-anchor" tabIndex={0}>
                     <WarningIcon />
@@ -3758,7 +3977,7 @@ function ScenarioCard({
             )}
           </div>
           <div className="scenario-subtitle-line">
-            <span>{describeDraftSummary(config, run)}</span>
+            <span>{describeDraftSummary(config)}</span>
             <span className="scenario-subtitle-separator">•</span>
             <GeneratedDataMetric
               className="scenario-generated-data"
@@ -3789,79 +4008,99 @@ function ScenarioCard({
                 <span />
               </label>
             ) : null
-          ) : !isLocked ? (
+          ) : (
             <>
-              <button
-                className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
-                disabled={disabled}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggleCustomize(draft.id);
-                }}
-                type="button"
-              >
-                <IconAsset className="button-icon" src={settingsIconMidnight} />
-              </button>
-              <div className="play-menu-wrap">
+              {!isRunning ? (
                 <button
-                  className="play-button"
+                  aria-label={`Delete ${title}`}
+                  className="delete-test-button"
                   disabled={disabled}
-                  onClick={() => {
-                    if (connectionCount <= 1) {
-                      onRun(draft.id, 'selected');
-                      return;
-                    }
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(draft.id);
+                  }}
+                  title="Delete test"
+                  type="button"
+                >
+                  <TrashIcon />
+                </button>
+              ) : null}
 
-                    setShowRunMenu((open) => !open);
+              {!isLocked ? (
+                <>
+                  <button
+                    className={`edit-toggle ${isCustomizing ? 'is-open' : ''}`}
+                    disabled={disabled}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleCustomize(draft.id);
+                    }}
+                    type="button"
+                  >
+                    <IconAsset className="button-icon" src={settingsIconMidnight} />
+                  </button>
+                  <div className="play-menu-wrap">
+                    <button
+                      className="play-button"
+                      disabled={disabled}
+                      onClick={() => {
+                        if (connectionCount <= 1) {
+                          onRun(draft.id, 'selected');
+                          return;
+                        }
+
+                        setShowRunMenu((open) => !open);
+                      }}
+                      type="button"
+                    >
+                      {isLaunching ? '…' : '▶'}
+                    </button>
+
+                    {showRunMenu && connectionCount > 1 ? (
+                      <div className="play-menu">
+                        <button
+                          className="play-menu-option"
+                          onClick={() => {
+                            setShowRunMenu(false);
+                            onRun(draft.id, 'selected');
+                          }}
+                          type="button"
+                        >
+                          {`Run on ${selectedConnectionName ?? 'selected connection'}`}
+                        </button>
+                        <button
+                          className="play-menu-option"
+                          onClick={() => {
+                            setShowRunMenu(false);
+                            onRun(draft.id, 'all');
+                          }}
+                          type="button"
+                        >
+                          Run on all connections
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : isRunning ? (
+                <button
+                  className="running-control"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCancelRun();
                   }}
                   type="button"
                 >
-                  {isLaunching ? '…' : '▶'}
+                  <RunningIndicator />
+                  <span className="stop-run-button">■</span>
                 </button>
-
-                {showRunMenu && connectionCount > 1 ? (
-                  <div className="play-menu">
-                    <button
-                      className="play-menu-option"
-                      onClick={() => {
-                        setShowRunMenu(false);
-                        onRun(draft.id, 'selected');
-                      }}
-                      type="button"
-                    >
-                      {`Run on ${selectedConnectionName ?? 'selected connection'}`}
-                    </button>
-                    <button
-                      className="play-menu-option"
-                      onClick={() => {
-                        setShowRunMenu(false);
-                        onRun(draft.id, 'all');
-                      }}
-                      type="button"
-                    >
-                      Run on all connections
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+              ) : run?.status !== 'completed' ? (
+                <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
+                  {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
+                </span>
+              ) : null}
             </>
-          ) : run?.status === 'running' ? (
-            <button
-              className="running-control"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCancelRun();
-              }}
-              type="button"
-            >
-              <RunningIndicator />
-              <span className="stop-run-button">■</span>
-            </button>
-          ) : run?.status !== 'completed' ? (
-            <span className={`scenario-state scenario-state-${run?.status ?? 'queued'}`}>
-              {isLaunching ? 'Launching' : run?.status ?? 'Queued'}
-            </span>
-          ) : null}
+          )}
         </div>
       </div>
 
@@ -3903,6 +4142,7 @@ function ScenarioCard({
           </div>
         </div>
       ) : null}
+
     </article>
   );
 }
@@ -3918,6 +4158,7 @@ function ScenarioList({
   hasRunningRuns,
   onClear,
   onCompareSelected,
+  onDelete,
   onRename,
   onCancelRun,
   onSelect,
@@ -3929,6 +4170,7 @@ function ScenarioList({
   runPendingDraftId,
   selectedComparisonRunIds,
   selectedConnectionName,
+  selectedConnectionSource,
   selectedDraftId,
   onConfigChange,
   onRun,
@@ -3942,6 +4184,8 @@ function ScenarioList({
       setShowNewTestMenu(false);
     }
   }, [canCreateDraft, compareMode]);
+
+  const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
 
   return (
     <aside className="scenario-panel">
@@ -4008,6 +4252,9 @@ function ScenarioList({
           drafts.map((draft) => {
             const scenario = scenarioMap.get(draft.scenarioId);
             const run = draft.runId ? runById.get(draft.runId) ?? null : null;
+            const connection = connectionById.get(draft.connectionId ?? run?.connectionId) ?? null;
+            const databaseSource = run?.databaseSource ?? connection?.databaseSource ?? selectedConnectionSource ?? null;
+            const connectionName = run?.connectionName ?? connection?.name ?? selectedConnectionName ?? null;
             if (!scenario) {
               return null;
             }
@@ -4021,6 +4268,8 @@ function ScenarioList({
                 }
                 config={draft.config}
                 connectionCount={connections.length}
+                connectionName={connectionName}
+                databaseSource={databaseSource}
                 disabled={hasRunningRuns || runPendingDraftId !== null}
                 draft={draft}
                 isCustomizing={draft.isCustomizing}
@@ -4030,6 +4279,7 @@ function ScenarioList({
                 isSelected={!compareMode && selectedDraftId === draft.id}
                 key={draft.id}
                 onCancelRun={onCancelRun}
+                onDelete={onDelete}
                 onRename={onRename}
                 onSelect={onSelect}
                 onToggleCompareSelection={onToggleCompareSelection}
@@ -4234,6 +4484,22 @@ function CompareMetricPicker({ onChange, options, selectedKey }) {
   );
 }
 
+function CompareRunLegend({ colorMap, comparedRuns }) {
+  return (
+    <div className="compare-run-legend">
+      {comparedRuns.map(({ draft, run }, index) => (
+        <div className="compare-run-legend-item" key={run.id}>
+          <span
+            className="compare-run-color-dot"
+            style={{ backgroundColor: colorMap[index] }}
+          />
+          <span className="compare-run-legend-name">{getBaseRunLabel(run, draft)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TimeseriesChart({
   color,
   emptyValue = 'Waiting for samples',
@@ -4355,6 +4621,8 @@ function CompareTimeseriesChart({
           selectedKey={selectedMetricKey}
         />
       </div>
+
+      <CompareRunLegend colorMap={colorMap} comparedRuns={comparedRuns} />
 
       <div className="chart-area">
         {data.length ? (
@@ -4695,7 +4963,7 @@ function ComparePanel({ comparedRuns }) {
   const rows = buildComparisonRows(comparedRuns);
   const groupedRows = groupComparisonRows(rows);
   const canCompareTimelines = canCompareRunTimelines(comparedRuns);
-  const compareColors = comparedRuns.map((_, index) => getCompareColor(index));
+  const compareColors = buildCompareColorMap(comparedRuns);
 
   async function handleExportPdf() {
     const previousCollapsedSections = collapsedSections;
@@ -4811,6 +5079,10 @@ function ComparePanel({ comparedRuns }) {
                       <span className="comparison-run-connection">
                         {run.connectionName ?? run.target?.summary ?? '—'}
                       </span>
+                      <DatabaseSourceBadge
+                        className="comparison-source-badge"
+                        source={run.databaseSource}
+                      />
                     </div>
                   </th>
                 ))}
@@ -5208,11 +5480,20 @@ export default function App() {
   }
 
   useEffect(() => {
+    const scenarioIds = new Set(appState.scenarios.map((scenario) => scenario.id));
+    const visibleRunIds = new Set(
+      appState.runs
+        .filter((run) => scenarioIds.has(run.scenarioId))
+        .map((run) => run.id),
+    );
+
     setDrafts((currentDrafts) => {
-      const nextDrafts = currentDrafts.filter((draft) => scenarioMap.has(draft.scenarioId));
+      const nextDrafts = currentDrafts.filter(
+        (draft) => scenarioIds.has(draft.scenarioId) && (!draft.runId || visibleRunIds.has(draft.runId)),
+      );
       return nextDrafts.length === currentDrafts.length ? currentDrafts : nextDrafts;
     });
-  }, [appState.scenarios]);
+  }, [appState.runs, appState.scenarios]);
 
   useEffect(() => {
     if (!visibleRuns.length) {
@@ -5272,7 +5553,7 @@ export default function App() {
 
       return changed ? nextDrafts : currentDrafts;
     });
-  }, [appState.runs, appState.scenarios, runPendingDraftId, visibleRuns]);
+  }, [appState.runs, appState.scenarios, runPendingDraftId]);
 
   useEffect(() => {
     if (!appState.selectedPresetName) {
@@ -6069,7 +6350,7 @@ export default function App() {
     setupState.status !== 'ready' ||
     hasRunningRuns ||
     hasActiveLoads ||
-    connections.length >= 3;
+    connections.length >= 4;
 
   async function handleRetrySetup() {
     try {
@@ -6122,6 +6403,60 @@ export default function App() {
     );
   }
 
+  async function handleDeleteDraft(draftId) {
+    const draft = drafts.find((entry) => entry.id === draftId);
+    if (!draft) {
+      return;
+    }
+
+    setConnectError('');
+
+    const removeDraftFromList = () => {
+      const remainingDrafts = drafts.filter((entry) => entry.id !== draftId);
+      setDrafts(remainingDrafts);
+
+      if (selectedDraftId === draftId) {
+        setSelectedDraftId(remainingDrafts[0]?.id ?? null);
+      }
+    };
+
+    if (!draft.runId) {
+      removeDraftFromList();
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/run/${encodeURIComponent(draft.runId)}`, {
+        method: 'DELETE',
+      });
+      const payload = await readJsonResponse(response, 'Delete failed.');
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          setSelectedComparisonRunIds((currentIds) => currentIds.filter((runId) => runId !== draft.runId));
+          removeDraftFromList();
+          return;
+        }
+
+        throw new Error(payload.error ?? 'Delete failed.');
+      }
+
+      startTransition(() => {
+        setAppState(payload.state ?? EMPTY_APP_STATE);
+      });
+      setSelectedComparisonRunIds((currentIds) => {
+        const nextIds = currentIds.filter((runId) => runId !== draft.runId);
+        if (nextIds.length < 2) {
+          setCompareView(false);
+        }
+        return nextIds;
+      });
+      removeDraftFromList();
+    } catch (error) {
+      setConnectError(error.message);
+    }
+  }
+
   function handleNewTest(scenarioId) {
     if (hasReadyDraft || !appState.scenarios.length || !connections.length) {
       return;
@@ -6149,9 +6484,9 @@ export default function App() {
         throw new Error(payload.error ?? 'Clear failed.');
       }
 
-      startTransition(() => {
-        setAppState(payload.state ?? EMPTY_APP_STATE);
-      });
+      setAppState(payload.state ?? EMPTY_APP_STATE);
+      runLaunchSnapshotRef.current = null;
+      setRunPendingDraftId(null);
 
       setCompareMode(false);
       setCompareView(false);
@@ -6264,6 +6599,7 @@ export default function App() {
             onCancelRun={() => setShowCancelRunPrompt(true)}
             onClear={handleClear}
             onCompareSelected={handleCompareSelected}
+            onDelete={handleDeleteDraft}
             onRename={handleRenameDraft}
             onSelect={handleSelectDraft}
             onToggleCompareMode={handleToggleCompareMode}
@@ -6278,6 +6614,7 @@ export default function App() {
             scenarioMap={scenarioMap}
             selectedComparisonRunIds={selectedComparisonRunIds}
             selectedConnectionName={selectedConnection?.name ?? null}
+            selectedConnectionSource={selectedConnection?.databaseSource ?? null}
             selectedDraftId={selectedDraftId}
           />
 

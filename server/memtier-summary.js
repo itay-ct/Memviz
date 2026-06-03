@@ -17,6 +17,21 @@ const configPatterns = [
 ];
 
 const rowNames = new Set(['sets', 'gets', 'waits', 'totals']);
+const distributionRowNames = new Map([
+  ['set', { key: 'sets', label: 'Sets' }],
+  ['get', { key: 'gets', label: 'Gets' }],
+  ['wait', { key: 'waits', label: 'Waits' }],
+]);
+
+export function parseMemtierProgressPercent(line) {
+  const match = String(line ?? '').match(/^\[RUN\s+#\d+\s+(\d+(?:\.\d+)?)%,/i);
+  if (!match) {
+    return null;
+  }
+
+  const progress = Number(match[1]);
+  return Number.isFinite(progress) ? progress : null;
+}
 
 export function createEmptySummary() {
   return {
@@ -35,6 +50,25 @@ export function applySummaryLine(summary, line) {
     const match = trimmed.match(pattern.regex);
     if (match) {
       summary.config[pattern.key] = Number(match[1]);
+      return true;
+    }
+  }
+
+  const distributionParts = trimmed.split(/\s+/);
+  if (distributionParts.length === 3) {
+    const distributionRow = distributionRowNames.get(distributionParts[0].toLowerCase());
+    const latency = parseMetricValue(distributionParts[1]);
+    const percentile = parseMetricValue(distributionParts[2]);
+
+    if (distributionRow && latency !== null && percentile !== null) {
+      const result = summary.results[distributionRow.key] ?? { label: distributionRow.label };
+      result.maxLatency = Math.max(result.maxLatency ?? 0, latency);
+      summary.results[distributionRow.key] = result;
+
+      const totals = summary.results.totals ?? { label: 'Totals' };
+      totals.maxLatency = Math.max(totals.maxLatency ?? 0, latency);
+      summary.results.totals = totals;
+
       return true;
     }
   }
@@ -61,6 +95,7 @@ export function applySummaryLine(summary, line) {
     p90Latency: hasP90Column ? parseMetricValue(parts[6]) : null,
     p99Latency: parseMetricValue(parts[hasP90Column ? 7 : 6]),
     p999Latency: parseMetricValue(parts[hasP90Column ? 8 : 7]),
+    maxLatency: summary.results[rowName]?.maxLatency ?? null,
     kbSec: parseMetricValue(parts[hasP90Column ? 9 : 8]),
   };
 

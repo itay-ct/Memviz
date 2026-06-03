@@ -30,6 +30,31 @@ function createScenarioDefinition(overrides = {}) {
   });
 }
 
+function createCommandScenarioDefinition(overrides = {}) {
+  return normalizeScenarioDefinition({
+    id: 'wide-random-read',
+    name: 'Wide Random Read',
+    kind: 'command',
+    defaults: {
+      clients: 20,
+      threads: 2,
+      testTime: 30,
+      limitMode: 'time',
+      requestCount: 1000,
+      rateLimitEnabled: false,
+      rateLimit: 20000,
+      pipeline: 64,
+      keyPrefix: 'flex:data:',
+      keyMinimum: 1,
+      keyMaximum: 1000,
+      commandKeyPattern: 'R',
+      distinctClientSeed: true,
+      command: 'GET __key__',
+      ...overrides,
+    },
+  });
+}
+
 test('normalizeScenarioDefinition rejects partial staircase defaults', () => {
   assert.throws(
     () =>
@@ -91,6 +116,15 @@ test('normalizeScenarioConfig accepts valid staircase config', () => {
   assert.equal(config.stepDuration, 10);
 });
 
+test('normalizeScenarioConfig accepts cluster mode config', () => {
+  const scenario = createScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {
+    clusterModeEnabled: true,
+  });
+
+  assert.equal(config.clusterModeEnabled, true);
+});
+
 test('buildMemtierArgsFromConfig keeps flat runs unchanged', () => {
   const scenario = createScenarioDefinition();
   const config = normalizeScenarioConfig(scenario, {});
@@ -112,6 +146,60 @@ test('buildMemtierArgsFromConfig keeps flat runs unchanged', () => {
     '32',
     '--test-time',
     '30',
+  ]);
+});
+
+test('buildMemtierArgsFromConfig includes cluster mode flag when enabled', () => {
+  const scenario = createScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {
+    clusterModeEnabled: true,
+  });
+
+  assert.deepEqual(buildMemtierArgsFromConfig(scenario, config), [
+    '--clients',
+    '20',
+    '--threads',
+    '2',
+    '--pipeline',
+    '1',
+    '--print-percentiles',
+    '50,90,99,99.9',
+    '--key-prefix',
+    'memtier-',
+    '--cluster-mode',
+    '--ratio',
+    '1:10',
+    '--data-size',
+    '32',
+    '--test-time',
+    '30',
+  ]);
+});
+
+test('buildMemtierArgsFromConfig includes advanced memtier parameters', () => {
+  const scenario = createScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {
+    memtierAdvanced: {
+      hideHistogram: { enabled: true },
+      printPercentiles: { enabled: true, value: '50,95,99,99.9' },
+      commandStatsBreakdown: { enabled: true, value: 'line' },
+      commands: { enabled: true, value: 'PING\nGET __key__' },
+      keyMaximum: { enabled: true, value: 1000 },
+    },
+  });
+
+  assert.deepEqual(buildMemtierArgsFromConfig(scenario, config).slice(-11), [
+    '--hide-histogram',
+    '--print-percentiles',
+    '50,95,99,99.9',
+    '--command-stats-breakdown',
+    'line',
+    '--command',
+    'PING',
+    '--command',
+    'GET __key__',
+    '--key-maximum',
+    '1000',
   ]);
 });
 
@@ -148,4 +236,46 @@ test('buildMemtierArgsFromConfig includes staircase args in order', () => {
     '--step-duration',
     '10',
   ]);
+});
+
+test('buildMemtierArgsFromConfig includes command key range and pattern args', () => {
+  const scenario = createCommandScenarioDefinition();
+  const config = normalizeScenarioConfig(scenario, {});
+
+  assert.deepEqual(buildMemtierArgsFromConfig(scenario, config), [
+    '--clients',
+    '20',
+    '--threads',
+    '2',
+    '--pipeline',
+    '64',
+    '--print-percentiles',
+    '50,90,99,99.9',
+    '--key-prefix',
+    'flex:data:',
+    '--key-minimum',
+    '1',
+    '--key-maximum',
+    '1000',
+    '--command',
+    'GET __key__',
+    '--command-stats-breakdown',
+    'line',
+    '--command-key-pattern',
+    'R',
+    '--test-time',
+    '30',
+    '--distinct-client-seed',
+  ]);
+});
+
+test('normalizeScenarioDefinition rejects inverted key ranges', () => {
+  assert.throws(
+    () =>
+      createCommandScenarioDefinition({
+        keyMinimum: 200,
+        keyMaximum: 100,
+      }),
+    /key minimum must be less than or equal to key maximum/i,
+  );
 });

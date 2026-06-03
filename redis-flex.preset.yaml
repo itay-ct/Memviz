@@ -1,0 +1,111 @@
+# Redis Flex 250GB comparison preset.
+#
+# Intended flow:
+# 1. Connect both Flex databases, one configured as 10/90 RAM/disk and one as 50/50.
+# 2. Load "Flex Current 200GB 1KB Strings" into both databases with flushing enabled.
+#    This creates flex:data:1 through flex:data:200000000.
+# 3. Run the same tests against both databases and compare the resulting runs.
+#
+# The "New Values" test uses the spare 50GB logical range:
+# flex:data:200000001 through flex:data:250000000.
+# Run it before the mixed read if you want the upper range populated by normal
+# memtier SET/GET behavior.
+
+name: redis-flex
+label: Redis Flex 250GB
+
+tests:
+  - id: flex-current-values-random-read
+    name: Current Values Random Read
+    kind: command
+    estimated_ops_per_sec: 3000
+    suggested_dataset_preset_id: flex-current-200gb-1kb-strings
+    defaults:
+      clients: 64
+      threads: 4
+      testTime: 600
+      limitMode: time
+      requestCount: 1000000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: "flex:data:"
+      keyMinimum: 1
+      keyMaximum: 200000000
+      commandKeyPattern: R
+      distinctClientSeed: true
+      command: "GET __key__"
+
+  - id: flex-new-values-random-read
+    name: New Values Random Read
+    kind: workload
+    estimated_ops_per_sec: 50000
+    suggested_dataset_preset_id: flex-current-200gb-1kb-strings
+    defaults:
+      clients: 100
+      threads: 4
+      testTime: 600
+      limitMode: requests
+      requestCount: 625000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: "flex:data:"
+      keyMinimum: 200000001
+      keyMaximum: 250000000
+      distinctClientSeed: true
+      setRatio: 1
+      getRatio: 4
+      dataSize: 1024
+
+  - id: flex-mixed-current-new-random-read
+    name: Mixed Current + New Random Read
+    kind: command
+    estimated_ops_per_sec: 3000
+    suggested_dataset_preset_id: flex-current-200gb-1kb-strings
+    defaults:
+      clients: 64
+      threads: 4
+      testTime: 600
+      limitMode: time
+      requestCount: 1000000
+      rateLimitEnabled: false
+      rateLimit: 20000
+      pipeline: 1
+      keyPrefix: "flex:data:"
+      keyMinimum: 1
+      keyMaximum: 250000000
+      commandKeyPattern: R
+      distinctClientSeed: true
+      command: "GET __key__"
+
+dataset_presets:
+  - id: flex-current-200gb-1kb-strings
+    name: Flex Current 200GB 1KB Strings
+    record_count: 200000000
+    total_size: approx. 200 GB raw values (200M x 1KB)
+    dataset_yaml: |
+      name: flex-current-200gb-1kb-strings
+      records: 200000000
+      seed: 42
+      generator:
+        type: synthetic
+        entity: value
+        fields:
+          id:
+            type: int
+            unique: true
+          payload:
+            type: bytes
+            size: 1024
+            vary_by_record: true
+            alphabet: redis-flex-250gb-random-read-baseline-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+    storage_yaml: |
+      type: string
+      key_prefix: "flex:data:"
+      value_field: payload
+      write_mode: pipeline
+      pipeline_size: 2000
+      parallelism: 16
+      index:
+        enabled: false
