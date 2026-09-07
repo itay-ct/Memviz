@@ -3,6 +3,40 @@
 memviz is a small Redis benchmarking workspace built around `memtier_benchmark`.
 It lets you connect to Redis, launch benchmark presets, watch live StatsD-backed metrics, compare finished runs, and export results from a single web app.
 
+## Demos
+
+See memviz in action: compare Redis configurations, explore performance trade-offs, and run repeatable demos with presets.
+
+### Pipeline settings on local Redis
+
+Benchmark different pipeline settings against a locally installed Redis instance.
+
+https://github.com/user-attachments/assets/7059562c-bd31-459f-8028-0843f3931fd1
+
+### Compare RAM/disk ratios
+
+Benchmark two databases with different RAM/disk ratios to compare their performance.
+
+https://github.com/user-attachments/assets/ca2b14d3-25c0-41af-8d64-59b7cbd65fed
+
+### Durability: AOF on every write
+
+See the performance impact of AOF on every write using memviz, with no replication.
+
+https://github.com/user-attachments/assets/f9354557-5b48-43f4-98a4-ddc53b19a1f3
+
+### Scaling and throughput
+
+See how scaling affects throughput using memviz.
+
+https://github.com/user-attachments/assets/269fd2c1-f0c6-4010-ba77-0958150091ed
+
+### Search presets and predefined datasets
+
+The Search preset follows scenarios from the [Redis Search Performance Tuning lab](https://flockjay.com/course/igcsnmgievnvxd?tab=details). Load predefined datasets and demonstrate how choosing the right index schema affects search performance.
+
+https://github.com/user-attachments/assets/130c82ee-8b2b-46e2-a995-000ebfb8cc42
+
 ## Quick start
 
 One command:
